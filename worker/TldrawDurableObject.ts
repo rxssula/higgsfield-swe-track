@@ -13,11 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
 import { serializeCanvasState } from "../src/canvas/serializer";
 import type { CanvasSnapshot } from "../src/canvas/types";
-import {
-    invokeAgent,
-    generateBrainstormPrompt,
-    classifyVoiceCommand,
-} from "../src/agent/claude";
+import { invokeAgent, classifyVoiceCommand } from "../src/agent/claude";
 import {
     submitGeneration,
     pollUntilDone,
