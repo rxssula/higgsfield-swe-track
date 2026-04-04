@@ -1220,3 +1220,238 @@ body {
         transform: rotate(360deg);
     }
 }
+
+/* ── Compact Style Panel ── */
+.csp-root {
+    position: absolute;
+    top: 100px;
+    right: 12px;
+    z-index: 500;
+}
+
+.csp-trigger {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 6px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(13, 13, 13, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.csp-trigger:hover {
+    border-color: rgba(200, 255, 0, 0.25);
+    background: rgba(13, 13, 13, 0.92);
+    color: rgba(255, 255, 255, 0.6);
+    box-shadow:
+        0 0 0 1px rgba(200, 255, 0, 0.04),
+        0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.csp-trigger--open {
+    border-color: rgba(200, 255, 0, 0.2);
+    background: rgba(13, 13, 13, 0.92);
+}
+
+.csp-trigger:active {
+    transform: scale(0.96);
+}
+
+.csp-trigger-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.1);
+    transition: box-shadow 0.2s ease;
+}
+
+.csp-trigger:hover .csp-trigger-dot {
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.1);
+}
+
+.csp-trigger-chevron {
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+}
+
+.csp-trigger-chevron--open {
+    transform: rotate(180deg);
+}
+
+/* ── Popover panel ── */
+.csp-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 192px;
+    padding: 10px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(13, 13, 13, 0.94);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    box-shadow:
+        0 8px 40px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.03),
+        0 0 80px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: csp-pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: top right;
+}
+
+@keyframes csp-pop-in {
+    from {
+        opacity: 0;
+        transform: scale(0.92) translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.csp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.csp-section + .csp-section {
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.csp-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.2);
+    padding-left: 2px;
+}
+
+/* ── Color grid ── */
+.csp-color-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 4px;
+    justify-items: center;
+}
+
+.csp-color-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    background: var(--dot-color);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+    position: relative;
+}
+
+.csp-color-dot::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid transparent;
+    transition: border-color 0.15s ease;
+}
+
+.csp-color-dot:hover {
+    transform: scale(1.18);
+    z-index: 1;
+}
+
+.csp-color-dot--active {
+    border-color: rgba(0, 0, 0, 0.4);
+}
+
+.csp-color-dot--active::before {
+    border-color: #c8ff00;
+}
+
+.csp-color-dot--active:hover {
+    transform: scale(1.12);
+}
+
+/* ── Size buttons ── */
+.csp-row {
+    display: flex;
+    gap: 3px;
+}
+
+.csp-size-btn {
+    flex: 1;
+    padding: 4px 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.35);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+}
+
+.csp-size-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.csp-size-btn--active {
+    background: rgba(200, 255, 0, 0.1);
+    border-color: rgba(200, 255, 0, 0.25);
+    color: #c8ff00;
+}
+
+.csp-size-btn--active:hover {
+    background: rgba(200, 255, 0, 0.15);
+}
+
+/* ── Icon buttons (fill, dash) ── */
+.csp-icon-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.35);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.csp-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.csp-icon-btn--active {
+    background: rgba(200, 255, 0, 0.1);
+    border-color: rgba(200, 255, 0, 0.25);
+    color: #c8ff00;
+}
+
+.csp-icon-btn--active:hover {
+    background: rgba(200, 255, 0, 0.15);
+}
+
+/* Hide the default tldraw style panel */
+.tlui-style-panel__wrapper {
+    display: none !important;
+}

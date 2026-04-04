@@ -25,6 +25,7 @@ import {
     HistoryPanel,
     type SnapshotMeta,
 } from "../components/HistoryPanel";
+import { CompactStylePanel } from "../components/CompactStylePanel";
 
 interface Generation {
     id: string;
@@ -423,6 +424,7 @@ export function Room() {
             MainMenu: null,
             PageMenu: null,
             ActionsMenu: null,
+            StylePanel: null,
             Toolbar: function GenerateToolbar() {
                 return (
                     <DefaultToolbar>
@@ -589,6 +591,9 @@ function RoomWrapper({
 
             {/* Voice chat controls */}
             {roomId && <VoiceChatPanel roomId={roomId} />}
+
+            {/* Compact style/color picker */}
+            {editor && <CompactStylePanel editor={editor} />}
 
             {/* History toggle + panel */}
             <HistoryToggleButton onClick={onHistoryToggle} />
