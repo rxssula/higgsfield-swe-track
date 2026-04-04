@@ -21,39 +21,93 @@ const schema = createTLSchema({
 // persisted automatically to SQLite via ctx.storage.
 export class TldrawDurableObject extends DurableObject {
 	private room: TLSocketRoom<TLRecord, void>
+	private voiceSessions = new Map<string, WebSocket>()
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env)
-		// Create SQLite-backed storage - persists automatically to Durable Object storage
 		const sql = new DurableObjectSqliteSyncWrapper(ctx.storage)
 		const storage = new SQLiteSyncStorage<TLRecord>({ sql })
-
-		// Create the room that handles sync protocol
 		this.room = new TLSocketRoom<TLRecord, void>({ schema, storage })
 	}
 
-	private readonly router = AutoRouter({ catch: (e) => error(e) }).get(
-		'/api/connect/:roomId',
-		(request) => this.handleConnect(request)
-	)
+	private readonly router = AutoRouter({ catch: (e) => error(e) })
+		.get('/api/connect/:roomId', (request) => this.handleConnect(request))
+		.get('/api/voice/:roomId', (request) => this.handleVoiceConnect(request))
 
-	// Entry point for all requests to the Durable Object
 	fetch(request: Request): Response | Promise<Response> {
 		return this.router.fetch(request)
 	}
 
-	// Handle new WebSocket connection requests
 	async handleConnect(request: IRequest) {
 		const sessionId = request.query.sessionId as string
 		if (!sessionId) return error(400, 'Missing sessionId')
 
-		// Create the websocket pair for the client
 		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair()
 		serverWebSocket.accept()
-
-		// Connect to the room
 		this.room.handleSocketConnect({ sessionId, socket: serverWebSocket })
 
 		return new Response(null, { status: 101, webSocket: clientWebSocket })
+	}
+
+	// ── Voice chat signaling ──
+
+	async handleVoiceConnect(request: IRequest) {
+		const sessionId = request.query.sessionId as string
+		if (!sessionId) return error(400, 'Missing sessionId')
+
+		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair()
+		serverWebSocket.accept()
+
+		const currentPeers = Array.from(this.voiceSessions.keys())
+		serverWebSocket.send(
+			JSON.stringify({ type: 'voice-peers', peers: currentPeers }),
+		)
+
+		this.voiceSessions.set(sessionId, serverWebSocket)
+		this.broadcastVoice({ type: 'voice-join', sessionId }, sessionId)
+
+		serverWebSocket.addEventListener('message', (event) => {
+			try {
+				const msg = JSON.parse(event.data as string)
+
+				if (msg.type === 'voice-leave') {
+					this.voiceSessions.delete(sessionId)
+					this.broadcastVoice({ type: 'voice-leave', sessionId })
+					serverWebSocket.close()
+					return
+				}
+
+				if (msg.to) {
+					const target = this.voiceSessions.get(msg.to)
+					if (target && target.readyState === 1) {
+						target.send(JSON.stringify(msg))
+					}
+				}
+			} catch {
+				/* ignore malformed messages */
+			}
+		})
+
+		serverWebSocket.addEventListener('close', () => {
+			this.voiceSessions.delete(sessionId)
+			this.broadcastVoice({ type: 'voice-leave', sessionId })
+		})
+
+		serverWebSocket.addEventListener('error', () => {
+			this.voiceSessions.delete(sessionId)
+			this.broadcastVoice({ type: 'voice-leave', sessionId })
+		})
+
+		return new Response(null, { status: 101, webSocket: clientWebSocket })
+	}
+
+	private broadcastVoice(msg: object, excludeId?: string) {
+		const data = JSON.stringify(msg)
+		for (const [id, socket] of this.voiceSessions) {
+			if (id === excludeId) continue
+			if (socket.readyState === 1) {
+				socket.send(data)
+			}
+		}
 	}
 }

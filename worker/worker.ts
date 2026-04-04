@@ -22,6 +22,13 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
 	})
 
+	// voice chat signaling — same DO per room so all voice peers meet in the same instance
+	.get('/api/voice/:roomId', (request, env) => {
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
+		const room = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return room.fetch(request.url, { headers: request.headers, body: request.body })
+	})
+
 	// assets can be uploaded to the bucket under /uploads:
 	.post('/api/uploads/:uploadId', handleAssetUpload)
 
