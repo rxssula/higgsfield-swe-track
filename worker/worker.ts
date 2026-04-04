@@ -1,8 +1,8 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
-import { serializeCanvasState } from '../src/canvas/serializer'
-import type { CanvasSnapshot } from '../src/canvas/types'
+import { generateBrainstormPrompt } from '../src/agent/claude'
+import { submitGeneration, pollUntilDone } from '../src/higgsfield/client'
 
 // make sure our sync durable object is made available to cloudflare
 export { TldrawDurableObject } from './TldrawDurableObject'
@@ -35,7 +35,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	// Frontend POSTs here to invoke the agent for a specific room.
 	// The agent runs Claude, then pushes actions back to all clients in the room
 	// via TLSocketRoom.sendCustomMessage() (see TldrawDurableObject.ts).
-	.post('/api/rooms/:roomId/agent/invoke', async (request) => {
+	.post('/api/rooms/:roomId/agent/invoke', async (request, env) => {
 		const { roomId } = request.params
 		if (!roomId) return error(400, 'Missing roomId')
 
@@ -49,17 +49,18 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 			mode?: string
 		}
 
-		if (!message) return error(400, 'Missing message')
 		if (!Array.isArray(shapes)) return error(400, 'Missing shapes array')
 		if (!Array.isArray(bindings)) return error(400, 'Missing bindings array')
 
-		const snapshot: CanvasSnapshot = { shapes: shapes as any, bindings: bindings as any }
-		const serialized = serializeCanvasState(snapshot)
-
-		// TODO (Milestone 3-5): call AgentEngine.handleInvoke(), then broadcast
-		// results via room stub → TldrawDurableObject.broadcastAgentActions()
-		console.log(`[agent:invoke] room=${roomId} mode=${mode ?? 'observer'} message="${message}" shapes=${shapes.length}`)
-		console.log('[canvas:serialized]\n', serialized)
+		// Forward to the Durable Object — it runs the pipeline and broadcasts
+		// progress + result to all connected clients via WebSocket.
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		await stub.fetch(new Request('https://do/api/agent/run', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ shapes, bindings, message, mode }),
+		}))
 
 		return Response.json({ ok: true })
 	})
@@ -83,6 +84,42 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		console.log(`[agent:set-mode] room=${roomId} mode=${mode}`)
 
 		return Response.json({ ok: true, mode })
+	})
+
+	// Takes a base64 canvas screenshot, runs it through Claude Vision to generate
+	// a brainstorm prompt, then submits to Higgsfield and returns the image URL.
+	.post('/api/rooms/:roomId/agent/brainstorm', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.json().catch(() => null)
+		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
+
+		const { image, mimeType } = body as { image?: string; mimeType?: string }
+		if (!image) return error(400, 'Missing image (base64)')
+		if (!mimeType) return error(400, 'Missing mimeType')
+
+		console.log(`[agent:brainstorm] room=${roomId}`)
+
+		// 1. Ask Claude to generate an image prompt from the canvas screenshot
+		const prompt = await generateBrainstormPrompt(
+			env.OPENROUTER_API_KEY,
+			env.OPENROUTER_MODEL,
+			image,
+			mimeType
+		)
+		console.log(`[agent:brainstorm] prompt="${prompt}"`)
+
+		// TODO: Higgsfield integration (commented out until credentials are ready)
+		// const requestId = await submitGeneration(
+		// 	env.HIGGSFIELD_API_KEY,
+		// 	env.HIGGSFIELD_API_SECRET,
+		// 	env.HIGGSFIELD_MODEL,
+		// 	prompt
+		// )
+		// const imageUrl = await pollUntilDone(env.HIGGSFIELD_API_KEY, env.HIGGSFIELD_API_SECRET, requestId)
+
+		return Response.json({ prompt })
 	})
 
 	.all('*', () => {

@@ -37,14 +37,21 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 	const shapeById = new Map(shapes.map((s) => [s.id, s]))
 
 	// --- 1. CANVAS OVERVIEW ---
-	const counts: Record<string, number> = {}
-	for (const s of shapes) counts[s.type] = (counts[s.type] ?? 0) + 1
-	const overviewLines = Object.entries(counts)
-		.map(([type, n]) => `  ${type}: ${n}`)
-		.join('\n')
-	sections.push(`## CANVAS OVERVIEW\nTotal shapes: ${shapes.length}\n${overviewLines}`)
+	const typeCounts: Record<string, number> = {}
+	for (const s of shapes) typeCounts[s.type] = (typeCounts[s.type] ?? 0) + 1
+	const get = (type: string) => typeCounts[type] ?? 0
+	const overviewSummary = [
+		`${get('note')} sticky notes`,
+		`${get('geo')} shapes`,
+		`${get('text')} text blocks`,
+		`${get('arrow')} arrows`,
+		`${get('frame')} frames`,
+		`${get('draw')} drawings`,
+		`${get('group')} groups`,
+	].join(', ')
+	sections.push(`CANVAS OVERVIEW: ${shapes.length} elements — ${overviewSummary}.`)
 
-	// --- 2. SPATIAL CLUSTERS ---
+	// --- 2. SPATIAL CLUSTERS OF STICKY NOTES ---
 	const clusters = findClusters(shapes)
 	const clusteredIds = new Set(clusters.flatMap((c) => c.shapeIds))
 
@@ -55,25 +62,25 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 				.map((id) => shapeById.get(id))
 				.filter(Boolean) as CanvasShape[]
 			const notes = members
-				.map((s) => `    - [${s.id}] "${extractText(s)}"`)
+				.map((s) => {
+					const color = typeof s.props.color === 'string' ? ` (${s.props.color})` : ''
+					return `  - [${s.id}] "${extractText(s)}"${color}`
+				})
 				.join('\n')
-			return `  Cluster ${i + 1} (${region}, ${members.length} notes):\n${notes}`
+			return `Cluster ${i + 1} (${region}, ${members.length} items):\n${notes}`
 		})
-		sections.push(`## SPATIAL CLUSTERS\n${clusterLines.join('\n\n')}`)
-	} else {
-		sections.push(`## SPATIAL CLUSTERS\n  (none)`)
+		sections.push(`SPATIAL CLUSTERS OF STICKY NOTES:\n\n${clusterLines.join('\n\n')}`)
 	}
 
-	// --- 3. ISOLATED NOTES ---
+	// --- 3. ISOLATED STICKY NOTES ---
 	const isolatedNotes = shapes.filter((s) => s.type === 'note' && !clusteredIds.has(s.id))
 	if (isolatedNotes.length > 0) {
 		const lines = isolatedNotes.map((s) => {
 			const region = getRegionLabel(s)
-			return `  - [${s.id}] "${extractText(s)}" at ${region}`
+			const color = typeof s.props.color === 'string' ? ` (${s.props.color})` : ''
+			return `  - [${s.id}] "${extractText(s)}"${color} at ${region}`
 		})
-		sections.push(`## ISOLATED NOTES\n${lines.join('\n')}`)
-	} else {
-		sections.push(`## ISOLATED NOTES\n  (none)`)
+		sections.push(`ISOLATED STICKY NOTES:\n${lines.join('\n')}`)
 	}
 
 	// --- 4. GEO SHAPES ---
@@ -87,9 +94,7 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 			const label = text ? ` "${text}"` : ''
 			return `  - [${s.id}] ${geo}${label} ${size}px at ${region}`
 		})
-		sections.push(`## GEO SHAPES\n${lines.join('\n')}`)
-	} else {
-		sections.push(`## GEO SHAPES\n  (none)`)
+		sections.push(`GEO SHAPES:\n${lines.join('\n')}`)
 	}
 
 	// --- 5. TEXT BLOCKS ---
@@ -99,9 +104,7 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 			const region = getRegionLabel(s)
 			return `  - [${s.id}] "${extractText(s)}" at ${region}`
 		})
-		sections.push(`## TEXT BLOCKS\n${lines.join('\n')}`)
-	} else {
-		sections.push(`## TEXT BLOCKS\n  (none)`)
+		sections.push(`TEXT BLOCKS:\n${lines.join('\n')}`)
 	}
 
 	// --- 6. CONNECTIONS (arrows) ---
@@ -116,21 +119,15 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 			const sourceShape = startBinding ? shapeById.get(startBinding.toId) : undefined
 			const targetShape = endBinding ? shapeById.get(endBinding.toId) : undefined
 
-			const sourceLabel = sourceShape
-				? `"${extractText(sourceShape)}" [${sourceShape.id}]`
-				: '(unconnected)'
-			const targetLabel = targetShape
-				? `"${extractText(targetShape)}" [${targetShape.id}]`
-				: '(unconnected)'
+			const sourceLabel = sourceShape ? `"${extractText(sourceShape)}"` : '(unconnected)'
+			const targetLabel = targetShape ? `"${extractText(targetShape)}"` : '(unconnected)'
 
 			const arrowText = extractText(arrow)
-			const labelPart = arrowText ? ` (label: "${arrowText}")` : ''
+			const labelPart = arrowText ? ` [label: "${arrowText}"]` : ''
 
-			return `  - [${arrow.id}]${labelPart} ${sourceLabel} → ${targetLabel}`
+			return `  - [${arrow.id}] ${sourceLabel} → ${targetLabel}${labelPart}`
 		})
-		sections.push(`## CONNECTIONS\n${lines.join('\n')}`)
-	} else {
-		sections.push(`## CONNECTIONS\n  (none)`)
+		sections.push(`CONNECTIONS (arrows):\n${lines.join('\n')}`)
 	}
 
 	// --- 7. FRAMES ---
@@ -138,16 +135,9 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 	if (frameShapes.length > 0) {
 		const lines = frameShapes.map((frame) => {
 			const children = shapes.filter((s) => s.parentId === frame.id)
-			const region = getRegionLabel(frame)
-			const size = `${Math.round(Number(frame.props.w ?? 0))}×${Math.round(Number(frame.props.h ?? 0))}`
-			const childLines = children
-				.map((c) => `      [${c.id}] ${c.type} "${extractText(c)}"`)
-				.join('\n')
-			return `  - [${frame.id}] "${extractText(frame)}" ${size}px at ${region}\n${childLines || '      (empty)'}`
+			return `  - [${frame.id}] "${extractText(frame)}": contains ${children.length} elements`
 		})
-		sections.push(`## FRAMES\n${lines.join('\n\n')}`)
-	} else {
-		sections.push(`## FRAMES\n  (none)`)
+		sections.push(`FRAMES:\n${lines.join('\n')}`)
 	}
 
 	// --- 8. GROUPS ---
@@ -161,9 +151,7 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 				.join('\n')
 			return `  - [${group.id}] group at ${region}\n${childLines || '      (empty)'}`
 		})
-		sections.push(`## GROUPS\n${lines.join('\n\n')}`)
-	} else {
-		sections.push(`## GROUPS\n  (none)`)
+		sections.push(`GROUPS:\n${lines.join('\n\n')}`)
 	}
 
 	return sections.join('\n\n')

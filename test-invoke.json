@@ -1,0 +1,51 @@
+{
+	"message": "find the strongest visual idea",
+	"shapes": [
+		{
+			"id": "shape:abc123",
+			"type": "note",
+			"x": 120,
+			"y": 340,
+			"rotation": 0,
+			"parentId": "page:page1",
+			"props": {
+				"color": "yellow",
+				"richText": {
+					"type": "doc",
+					"content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Users hate onboarding" }] }]
+				}
+			}
+		},
+		{
+			"id": "shape:def456",
+			"type": "note",
+			"x": 380,
+			"y": 360,
+			"rotation": 0,
+			"parentId": "page:page1",
+			"props": {
+				"color": "green",
+				"richText": {
+					"type": "doc",
+					"content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Gamify first 5 minutes" }] }]
+				}
+			}
+		},
+		{
+			"id": "shape:ghi789",
+			"type": "note",
+			"x": 900,
+			"y": 120,
+			"rotation": 0,
+			"parentId": "page:page1",
+			"props": {
+				"color": "violet",
+				"richText": {
+					"type": "doc",
+					"content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Pricing is confusing" }] }]
+				}
+			}
+		}
+	],
+	"bindings": []
+}
