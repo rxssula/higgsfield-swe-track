@@ -154,12 +154,25 @@ body {
     overflow: hidden;
 }
 
-/* ── Voice chat controls ── */
-.voice-join-btn {
+/* ── Room controls strip ── */
+.room-controls {
     position: absolute;
     top: 12px;
     right: 12px;
     z-index: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tlui-share-zone {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+}
+
+/* ── Voice chat controls ── */
+.voice-join-btn {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -191,10 +204,6 @@ body {
 }
 
 .voice-panel {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 500;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -273,10 +282,10 @@ body {
 }
 
 .voice-command-toast {
-    position: absolute;
+    position: fixed;
     top: 56px;
     right: 12px;
-    z-index: 500;
+    z-index: 600;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -756,10 +765,6 @@ body {
 
 /* ── History toggle button ── */
 .history-toggle-btn {
-    position: absolute;
-    top: 56px;
-    right: 12px;
-    z-index: 500;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1223,10 +1228,7 @@ body {
 
 /* ── Compact Style Panel ── */
 .csp-root {
-    position: absolute;
-    top: 100px;
-    right: 12px;
-    z-index: 500;
+    position: relative;
 }
 
 .csp-trigger {

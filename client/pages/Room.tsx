@@ -16,6 +16,7 @@ import {
     DefaultToolbar,
     DefaultToolbarContent,
     createShapeId,
+    PeopleMenu,
 } from "tldraw";
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
@@ -88,10 +89,7 @@ export function Room() {
 
     useEffect(() => {
         for (const [id, gen] of generations) {
-            if (
-                gen.status === "done" &&
-                !autoDismissedRef.current.has(id)
-            ) {
+            if (gen.status === "done" && !autoDismissedRef.current.has(id)) {
                 autoDismissedRef.current.add(id);
                 setTimeout(() => handleDismissGeneration(id), 10000);
             }
@@ -264,8 +262,7 @@ export function Room() {
                 });
                 if (!data.replayed) {
                     if (data.videoUrl) placeVideoOnCanvas(data.videoUrl);
-                    else if (data.imageUrl)
-                        placeImageOnCanvas(data.imageUrl);
+                    else if (data.imageUrl) placeImageOnCanvas(data.imageUrl);
                 }
             } else if (data.type === "agent:error" && data.generationId) {
                 setGenerations((prev) => {
@@ -277,10 +274,7 @@ export function Room() {
                     });
                     return next;
                 });
-            } else if (
-                data.type === "agent:dismiss" &&
-                data.generationId
-            ) {
+            } else if (data.type === "agent:dismiss" && data.generationId) {
                 setGenerations((prev) => {
                     const next = new Map(prev);
                     next.delete(data.generationId);
@@ -313,7 +307,9 @@ export function Room() {
                         }
                         ctx.drawImage(image, 0, 0);
                         const dataUrl = canvas.toDataURL("image/png");
-                        resolve(dataUrl.replace(/^data:image\/png;base64,/, ""));
+                        resolve(
+                            dataUrl.replace(/^data:image\/png;base64,/, ""),
+                        );
                     } catch (err) {
                         console.warn("[AI] failed to rasterize svg", err);
                         resolve(undefined);
@@ -388,7 +384,10 @@ export function Room() {
                             }
                         }
                     } catch (err) {
-                        console.warn("[AI] failed to capture sketch preview", err);
+                        console.warn(
+                            "[AI] failed to capture sketch preview",
+                            err,
+                        );
                     }
                 }
 
@@ -589,14 +588,12 @@ function RoomWrapper({
                 Copied to clipboard
             </div>
 
-            {/* Voice chat controls */}
-            {roomId && <VoiceChatPanel roomId={roomId} />}
-
-            {/* Compact style/color picker */}
-            {editor && <CompactStylePanel editor={editor} />}
-
-            {/* History toggle + panel */}
-            <HistoryToggleButton onClick={onHistoryToggle} />
+            {/* Unified controls strip */}
+            <div className="room-controls">
+                {editor && <CompactStylePanel editor={editor} />}
+                <HistoryToggleButton onClick={onHistoryToggle} />
+                {roomId && <VoiceChatPanel roomId={roomId} />}
+            </div>
             {roomId && (
                 <HistoryPanel
                     open={historyOpen}
@@ -897,15 +894,17 @@ function AiGenerateButton({
             >
                 {aiSelectMode ? <CloseIcon /> : <WandIcon />}
             </button>
-            {hover && tipPos && createPortal(
-                <span
-                    className="ai-generate-tooltip ai-generate-tooltip--visible"
-                    style={{ left: tipPos.x, top: tipPos.y }}
-                >
-                    {tooltipText}
-                </span>,
-                document.body,
-            )}
+            {hover &&
+                tipPos &&
+                createPortal(
+                    <span
+                        className="ai-generate-tooltip ai-generate-tooltip--visible"
+                        style={{ left: tipPos.x, top: tipPos.y }}
+                    >
+                        {tooltipText}
+                    </span>,
+                    document.body,
+                )}
         </>
     );
 }
