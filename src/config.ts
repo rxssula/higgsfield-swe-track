@@ -5,8 +5,6 @@ export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const CLAUDE_MAX_TOKENS = 1024; // brainstorm prompt is short
 
 export const HIGGSFIELD_BASE_URL = "https://platform.higgsfield.ai";
-export const HIGGSFIELD_POLL_INTERVAL_MS = 2_000;
-export const HIGGSFIELD_POLL_TIMEOUT_MS = 60_000;
 
 // Spatial clustering threshold (px) — tldraw notes are ~200px wide
 export const CLUSTER_THRESHOLD_PX = 300;
@@ -88,15 +86,12 @@ For VIDEO requests:
   "type": "video",
   "prompt": "A detailed, vivid video generation prompt expanding on the user's request. Describe the scene, movement, and atmosphere.",
   "params": {
-    "sound": "on",
-    "duration": 5,
-    "elements": [],
-    "cfg_scale": 0.5,
-    "multi_shots": false,
-    "aspect_ratio": "16:9",
-    "multi_prompt": []
+    "duration": 6,
+    "prompt_optimizer": true
   }
 }
+
+The video "params" object must match the Higgsfield request body shape exactly apart from the separate top-level "prompt". Do not add any other video parameter keys.
 
 ## Prompt Enhancement Rules
 
@@ -110,11 +105,9 @@ For VIDEO requests:
 ## Parameter Adjustments
 
 For video:
-- If user mentions "long" or "extended", set duration to 10
-- If user mentions "short" or "quick", set duration to 5
-- If user mentions "portrait" or "vertical", set aspect_ratio to "9:16"
-- If user mentions "square", set aspect_ratio to "1:1"
-- If user mentions "no sound" or "silent" or "mute", set sound to "off"
+- Always return exactly these two keys in "params":
+- "duration": 6
+- "prompt_optimizer": true
 
 For image:
 - If user mentions "high quality" or "detailed", set resolution to "2k"

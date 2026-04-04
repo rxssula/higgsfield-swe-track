@@ -1,16 +1,34 @@
 import { useSync } from "@tldraw/sync";
-import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+    ReactNode,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
-import { Tldraw, Editor, AssetRecordType, createShapeId } from "tldraw";
+import {
+    Tldraw,
+    Editor,
+    AssetRecordType,
+    DefaultToolbar,
+    DefaultToolbarContent,
+    createShapeId,
+} from "tldraw";
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
 import { VoiceChatManager, VoiceState } from "../voiceChat";
 
-type AgentState =
-    | { status: "idle" }
-    | { status: "working"; message: string }
-    | { status: "done"; imageUrl?: string; videoUrl?: string; synthesis: string }
-    | { status: "error"; message: string };
+interface Generation {
+    id: string;
+    status: "working" | "done" | "error";
+    message?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+    synthesis?: string;
+}
 
 interface PageBounds {
     x: number;
@@ -21,12 +39,44 @@ interface PageBounds {
 
 export function Room() {
     const { roomId } = useParams<{ roomId: string }>();
-    const [agentState, setAgentState] = useState<AgentState>({
-        status: "idle",
-    });
+    const [generations, setGenerations] = useState<Map<string, Generation>>(
+        () => new Map(),
+    );
     const [aiSelectMode, setAiSelectMode] = useState(false);
     const editorRef = useRef<Editor | null>(null);
     const selectionBoundsRef = useRef<PageBounds | null>(null);
+    const autoDismissedRef = useRef<Set<string>>(new Set());
+
+    const handleDismissGeneration = useCallback(
+        (generationId: string) => {
+            setGenerations((prev) => {
+                const next = new Map(prev);
+                next.delete(generationId);
+                return next;
+            });
+            autoDismissedRef.current.delete(generationId);
+            if (roomId) {
+                fetch(`/api/rooms/${roomId}/agent/dismiss`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ generationId }),
+                }).catch(() => {});
+            }
+        },
+        [roomId],
+    );
+
+    useEffect(() => {
+        for (const [id, gen] of generations) {
+            if (
+                gen.status === "done" &&
+                !autoDismissedRef.current.has(id)
+            ) {
+                autoDismissedRef.current.add(id);
+                setTimeout(() => handleDismissGeneration(id), 10000);
+            }
+        }
+    }, [generations, handleDismissGeneration]);
 
     const placeImageOnCanvas = useCallback((imageUrl: string) => {
         const editor = editorRef.current;
@@ -170,26 +220,52 @@ export function Room() {
         uri: `${window.location.origin}/api/connect/${roomId}`,
         assets: multiplayerAssetStore,
         onCustomMessageReceived: (data: any) => {
-            if (data.type === "agent:status") {
-                setAgentState({ status: "working", message: data.status });
-            } else if (data.type === "agent:done") {
-                if (data.videoUrl) {
-                    setAgentState({
+            if (data.type === "agent:status" && data.generationId) {
+                setGenerations((prev) => {
+                    const next = new Map(prev);
+                    next.set(data.generationId, {
+                        id: data.generationId,
+                        status: "working",
+                        message: data.status,
+                    });
+                    return next;
+                });
+            } else if (data.type === "agent:done" && data.generationId) {
+                setGenerations((prev) => {
+                    const next = new Map(prev);
+                    next.set(data.generationId, {
+                        id: data.generationId,
                         status: "done",
+                        imageUrl: data.imageUrl,
                         videoUrl: data.videoUrl,
                         synthesis: data.synthesis,
                     });
-                    placeVideoOnCanvas(data.videoUrl);
-                } else if (data.imageUrl) {
-                    setAgentState({
-                        status: "done",
-                        imageUrl: data.imageUrl,
-                        synthesis: data.synthesis,
-                    });
-                    placeImageOnCanvas(data.imageUrl);
+                    return next;
+                });
+                if (!data.replayed) {
+                    if (data.videoUrl) placeVideoOnCanvas(data.videoUrl);
+                    else if (data.imageUrl)
+                        placeImageOnCanvas(data.imageUrl);
                 }
-            } else if (data.type === "agent:error") {
-                setAgentState({ status: "error", message: data.message });
+            } else if (data.type === "agent:error" && data.generationId) {
+                setGenerations((prev) => {
+                    const next = new Map(prev);
+                    next.set(data.generationId, {
+                        id: data.generationId,
+                        status: "error",
+                        message: data.message,
+                    });
+                    return next;
+                });
+            } else if (
+                data.type === "agent:dismiss" &&
+                data.generationId
+            ) {
+                setGenerations((prev) => {
+                    const next = new Map(prev);
+                    next.delete(data.generationId);
+                    return next;
+                });
             }
         },
     });
@@ -225,8 +301,6 @@ export function Room() {
                 }
             }
 
-            setAgentState({ status: "working", message: "Reading canvas..." });
-
             fetch(`/api/rooms/${roomId}/agent/invoke`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -234,21 +308,47 @@ export function Room() {
                     shapes: shapesInBounds,
                     bindings: relevantBindings,
                 }),
-            }).catch((err) => {
-                setAgentState({ status: "error", message: String(err) });
-            });
+            }).catch(() => {});
         },
         [roomId],
+    );
+
+    const handleAiSelectStart = useCallback(() => {
+        setAiSelectMode(true);
+    }, []);
+
+    const handleAiSelectCancel = useCallback(() => {
+        setAiSelectMode(false);
+    }, []);
+
+    const components = useMemo(
+        () => ({
+            MainMenu: null,
+            PageMenu: null,
+            ActionsMenu: null,
+            Toolbar: function GenerateToolbar() {
+                return (
+                    <DefaultToolbar>
+                        <AiGenerateButton
+                            aiSelectMode={aiSelectMode}
+                            onStart={handleAiSelectStart}
+                            onCancel={handleAiSelectCancel}
+                        />
+                        <DefaultToolbarContent />
+                    </DefaultToolbar>
+                );
+            },
+        }),
+        [aiSelectMode, handleAiSelectCancel, handleAiSelectStart],
     );
 
     return (
         <RoomWrapper
             roomId={roomId}
-            agentState={agentState}
-            onAgentDismiss={() => setAgentState({ status: "idle" })}
+            generations={generations}
+            onDismissGeneration={handleDismissGeneration}
             aiSelectMode={aiSelectMode}
-            onAiSelectStart={() => setAiSelectMode(true)}
-            onAiSelectCancel={() => setAiSelectMode(false)}
+            onAiSelectCancel={handleAiSelectCancel}
             onAiSelect={handleAiSelect}
             editor={editorRef.current}
         >
@@ -256,11 +356,7 @@ export function Room() {
                 licenseKey="tldraw-2026-07-13/WyJGSFVscnJvLSIsWyIqIl0sMTYsIjIwMjYtMDctMTMiXQ.ffAi96kEDbYvfzuY4Xc/RMVMdarp1OrXCVWE4vls8eJkZb+PdYIDEWffxFYCYEhoeCKSCn0nM2RsbS/q5DwFzg"
                 store={store}
                 options={{ deepLinks: true }}
-                components={{
-                    MainMenu: null,
-                    PageMenu: null,
-                    ActionsMenu: null,
-                }}
+                components={components}
                 onMount={(editor) => {
                     editorRef.current = editor;
                     const prefs = editor.user.getUserPreferences();
@@ -282,20 +378,18 @@ export function Room() {
 function RoomWrapper({
     children,
     roomId,
-    agentState,
-    onAgentDismiss,
+    generations,
+    onDismissGeneration,
     aiSelectMode,
-    onAiSelectStart,
     onAiSelectCancel,
     onAiSelect,
     editor,
 }: {
     children: ReactNode;
     roomId?: string;
-    agentState: AgentState;
-    onAgentDismiss: () => void;
+    generations: Map<string, Generation>;
+    onDismissGeneration: (id: string) => void;
     aiSelectMode: boolean;
-    onAiSelectStart: () => void;
     onAiSelectCancel: () => void;
     onAiSelect: (bounds: PageBounds) => void;
     editor: Editor | null;
@@ -315,8 +409,6 @@ function RoomWrapper({
             setToastVisible(true);
         }
     };
-
-    const isWorking = agentState.status === "working";
 
     return (
         <div className="room-shell">
@@ -386,33 +478,6 @@ function RoomWrapper({
             {/* Voice chat controls */}
             {roomId && <VoiceChatPanel roomId={roomId} />}
 
-            {/* AI Generate button */}
-            <button
-                className={`ai-gen-btn ${aiSelectMode ? "ai-gen-btn--active" : ""} ${isWorking ? "ai-gen-btn--working" : ""}`}
-                onClick={aiSelectMode ? onAiSelectCancel : onAiSelectStart}
-                disabled={isWorking}
-                aria-label={
-                    aiSelectMode ? "Cancel AI selection" : "AI Generate"
-                }
-            >
-                {isWorking ? (
-                    <>
-                        <span className="ai-gen-spinner" />
-                        <span>Generating…</span>
-                    </>
-                ) : aiSelectMode ? (
-                    <>
-                        <CloseIcon />
-                        <span>Cancel</span>
-                    </>
-                ) : (
-                    <>
-                        <WandIcon />
-                        <span>Generate</span>
-                    </>
-                )}
-            </button>
-
             {/* AI area selection overlay */}
             {aiSelectMode && editor && (
                 <AiSelectOverlay
@@ -422,46 +487,54 @@ function RoomWrapper({
                 />
             )}
 
-            {/* Agent status overlay */}
-            {agentState.status !== "idle" && (
-                <div className="agent-status-card">
-                    {agentState.status === "working" && (
-                        <div className="agent-status-working">
-                            <span className="agent-status-dot" />
-                            {agentState.message}
+            {/* Agent status cards */}
+            {generations.size > 0 && (
+                <div className="agent-status-list">
+                    {Array.from(generations.values()).map((gen) => (
+                        <div key={gen.id} className="agent-status-card">
+                            {gen.status === "working" && (
+                                <div className="agent-status-working">
+                                    <span className="agent-status-dot" />
+                                    {gen.message}
+                                </div>
+                            )}
+                            {gen.status === "done" && (
+                                <div className="agent-status-done">
+                                    <p className="agent-synthesis">
+                                        {gen.synthesis}
+                                    </p>
+                                    <span className="agent-done-label">
+                                        {gen.videoUrl
+                                            ? "Video placed on canvas"
+                                            : "Image placed on canvas"}
+                                    </span>
+                                    <button
+                                        onClick={() =>
+                                            onDismissGeneration(gen.id)
+                                        }
+                                        className="agent-dismiss-btn"
+                                    >
+                                        dismiss
+                                    </button>
+                                </div>
+                            )}
+                            {gen.status === "error" && (
+                                <div className="agent-status-error">
+                                    <p className="agent-error-msg">
+                                        {gen.message}
+                                    </p>
+                                    <button
+                                        onClick={() =>
+                                            onDismissGeneration(gen.id)
+                                        }
+                                        className="agent-dismiss-btn"
+                                    >
+                                        dismiss
+                                    </button>
+                                </div>
+                            )}
                         </div>
-                    )}
-                    {agentState.status === "done" && (
-                        <div className="agent-status-done">
-                            <p className="agent-synthesis">
-                                {agentState.synthesis}
-                            </p>
-                            <span className="agent-done-label">
-                                {agentState.videoUrl
-                                    ? "Video placed on canvas"
-                                    : "Image placed on canvas"}
-                            </span>
-                            <button
-                                onClick={onAgentDismiss}
-                                className="agent-dismiss-btn"
-                            >
-                                dismiss
-                            </button>
-                        </div>
-                    )}
-                    {agentState.status === "error" && (
-                        <div className="agent-status-error">
-                            <p className="agent-error-msg">
-                                {agentState.message}
-                            </p>
-                            <button
-                                onClick={onAgentDismiss}
-                                className="agent-dismiss-btn"
-                            >
-                                dismiss
-                            </button>
-                        </div>
-                    )}
+                    ))}
                 </div>
             )}
 
@@ -654,6 +727,55 @@ function VoiceChatPanel({ roomId }: { roomId: string }) {
                     <span className="voice-command-label">Voice</span>
                     {commandToast}
                 </div>
+            )}
+        </>
+    );
+}
+
+function AiGenerateButton({
+    aiSelectMode,
+    onStart,
+    onCancel,
+}: {
+    aiSelectMode: boolean;
+    onStart: () => void;
+    onCancel: () => void;
+}) {
+    const btnRef = useRef<HTMLButtonElement>(null);
+    const [hover, setHover] = useState(false);
+    const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+
+    useEffect(() => {
+        if (!hover || !btnRef.current) {
+            setTipPos(null);
+            return;
+        }
+        const rect = btnRef.current.getBoundingClientRect();
+        setTipPos({ x: rect.left + rect.width / 2, y: rect.top });
+    }, [hover]);
+
+    const tooltipText = aiSelectMode ? "Cancel" : "Select to generate";
+
+    return (
+        <>
+            <button
+                ref={btnRef}
+                className={`ai-generate-btn ${aiSelectMode ? "ai-generate-btn--cancel" : ""}`}
+                onClick={aiSelectMode ? onCancel : onStart}
+                onMouseEnter={() => setHover(true)}
+                onMouseLeave={() => setHover(false)}
+                aria-label={tooltipText}
+            >
+                {aiSelectMode ? <CloseIcon /> : <WandIcon />}
+            </button>
+            {hover && tipPos && createPortal(
+                <span
+                    className="ai-generate-tooltip ai-generate-tooltip--visible"
+                    style={{ left: tipPos.x, top: tipPos.y }}
+                >
+                    {tooltipText}
+                </span>,
+                document.body,
             )}
         </>
     );

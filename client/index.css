@@ -243,8 +243,13 @@ body {
 }
 
 @keyframes voice-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
 }
 
 .voice-peers {
@@ -327,78 +332,161 @@ body {
     align-items: center;
 }
 
-/* ── AI Generate button ── */
-.ai-gen-btn {
-    position: absolute;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 500;
+/* ── AI generate icon button ── */
+.ai-generate-btn {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 9px 18px 9px 14px;
+    justify-content: center;
+    width: 50px;
+    height: 50px;
     border-radius: 12px;
-    border: 1px solid rgba(200, 255, 0, 0.15);
-    background: rgba(10, 10, 10, 0.88);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+    background: transparent;
     color: #c8ff00;
-    font-family: "Inter", sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    box-shadow:
-        0 0 0 1px rgba(200, 255, 0, 0.04),
-        0 2px 16px rgba(0, 0, 0, 0.5),
-        0 0 40px rgba(200, 255, 0, 0.03);
+    cursor: pointer;
+    transition:
+        color 0.2s ease,
+        transform 0.15s ease;
+    z-index: 1;
 }
 
-.ai-gen-btn:hover:not(:disabled) {
-    border-color: rgba(200, 255, 0, 0.35);
-    background: rgba(10, 10, 10, 0.95);
-    box-shadow:
-        0 0 0 1px rgba(200, 255, 0, 0.1),
-        0 4px 24px rgba(0, 0, 0, 0.6),
-        0 0 60px rgba(200, 255, 0, 0.06);
-    transform: translateX(-50%) translateY(-1px);
-}
-
-.ai-gen-btn:active:not(:disabled) {
-    transform: translateX(-50%) scale(0.97);
-}
-
-.ai-gen-btn--active {
-    border-color: rgba(255, 255, 255, 0.15);
-    color: rgba(255, 255, 255, 0.6);
-    background: rgba(255, 255, 255, 0.06);
-}
-
-.ai-gen-btn--working {
+.ai-generate-btn::before {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border-radius: 10px;
+    transition:
+        box-shadow 0.25s ease,
+        background 0.25s ease;
     pointer-events: none;
-    color: rgba(200, 255, 0, 0.6);
-    animation: ai-btn-glow 2s ease-in-out infinite;
+}
+
+.ai-generate-btn svg {
+    position: relative;
+    z-index: 1;
+    transition: filter 0.25s ease;
+}
+
+.ai-generate-btn:hover:not(:disabled) svg {
+    filter: drop-shadow(0 0 10px rgba(200, 255, 0, 0.5));
+}
+
+.ai-generate-btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.ai-generate-btn--cancel {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.ai-generate-btn--cancel::before {
+    background: transparent;
+    box-shadow: none;
+}
+
+.ai-generate-btn--cancel svg {
+    filter: none;
+}
+
+.ai-generate-btn--cancel:hover:not(:disabled) {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.ai-generate-btn--cancel:hover:not(:disabled)::before {
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: none;
+}
+
+.ai-generate-btn--cancel:hover:not(:disabled) svg {
+    filter: none;
+}
+
+.ai-generate-btn--working {
+    pointer-events: none;
+    color: rgba(200, 255, 0, 0.5);
+    animation: ai-icon-pulse 2s ease-in-out infinite;
+}
+
+.ai-generate-btn--working::before {
+    animation: ai-glow-pulse 2s ease-in-out infinite;
+}
+
+/* ── Tooltip (portal, fixed position) ── */
+.ai-generate-tooltip {
+    position: fixed;
+    z-index: 99999;
+    transform: translate(-50%, calc(-100% - 10px));
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.7);
+    font-family: "Inter", sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition:
+        opacity 0.15s ease,
+        transform 0.15s ease;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.ai-generate-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: rgba(20, 20, 20, 0.95);
+}
+
+.ai-generate-tooltip--visible {
+    opacity: 1;
+    transform: translate(-50%, calc(-100% - 14px));
 }
 
 .ai-gen-spinner {
     display: block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid rgba(200, 255, 0, 0.2);
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(200, 255, 0, 0.15);
     border-top-color: #c8ff00;
     border-radius: 50%;
     animation: ai-spin 0.7s linear infinite;
 }
 
 @keyframes ai-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
-@keyframes ai-btn-glow {
-    0%, 100% { box-shadow: 0 0 0 1px rgba(200, 255, 0, 0.06), 0 2px 16px rgba(0, 0, 0, 0.5), 0 0 30px rgba(200, 255, 0, 0.04); }
-    50% { box-shadow: 0 0 0 1px rgba(200, 255, 0, 0.12), 0 2px 16px rgba(0, 0, 0, 0.5), 0 0 50px rgba(200, 255, 0, 0.08); }
+@keyframes ai-icon-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+@keyframes ai-glow-pulse {
+    0%,
+    100% {
+        box-shadow:
+            0 0 12px rgba(200, 255, 0, 0.08),
+            0 0 4px rgba(200, 255, 0, 0.06);
+    }
+    50% {
+        box-shadow:
+            0 0 22px rgba(200, 255, 0, 0.18),
+            0 0 8px rgba(200, 255, 0, 0.12);
+    }
 }
 
 /* ── AI select overlay ── */
@@ -414,8 +502,12 @@ body {
 }
 
 @keyframes ai-overlay-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .ai-select-hint {
@@ -459,8 +551,14 @@ body {
 }
 
 @keyframes ai-hint-in {
-    from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
 }
 
 /* ── Selection rectangle ── */
@@ -485,15 +583,27 @@ body {
 }
 
 @keyframes ai-rect-dash {
-    to { stroke-dashoffset: -16; }
+    to {
+        stroke-dashoffset: -16;
+    }
 }
 
-/* ── Agent status card ── */
-.agent-status-card {
+/* ── Agent status list (stacking container) ── */
+.agent-status-list {
     position: fixed;
     bottom: 24px;
     right: 24px;
     z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 50vh;
+    overflow-y: auto;
+    pointer-events: none;
+}
+
+/* ── Agent status card ── */
+.agent-status-card {
     max-width: 320px;
     padding: 14px 18px;
     border-radius: 14px;
@@ -505,11 +615,18 @@ body {
         0 4px 32px rgba(0, 0, 0, 0.5),
         0 0 0 1px rgba(255, 255, 255, 0.03);
     animation: agent-card-in 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: all;
 }
 
 @keyframes agent-card-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .agent-status-working {
