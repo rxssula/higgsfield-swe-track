@@ -9,6 +9,7 @@
 		"preview": "vite preview"
 	},
 	"dependencies": {
+		"@tailwindcss/vite": "^4.2.2",
 		"@tldraw/sync": "^4.5.7",
 		"@tldraw/sync-core": "^4.5.7",
 		"@tldraw/tlschema": "^4.5.7",
@@ -18,6 +19,7 @@
 		"react": "^19.2.1",
 		"react-dom": "^19.2.1",
 		"react-router-dom": "^6.28.2",
+		"tailwindcss": "^4.2.2",
 		"tldraw": "^4.5.7"
 	},
 	"devDependencies": {
