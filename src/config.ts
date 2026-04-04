@@ -1,15 +1,15 @@
 // Constants that don't depend on runtime env.
 // Secrets come from the `env` parameter in each CF Worker handler — no process.env here.
 
-export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
-export const CLAUDE_MAX_TOKENS = 1024 // brainstorm prompt is short
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const CLAUDE_MAX_TOKENS = 1024; // brainstorm prompt is short
 
-export const HIGGSFIELD_BASE_URL = 'https://platform.higgsfield.ai'
-export const HIGGSFIELD_POLL_INTERVAL_MS = 2_000
-export const HIGGSFIELD_POLL_TIMEOUT_MS = 60_000
+export const HIGGSFIELD_BASE_URL = "https://platform.higgsfield.ai";
+export const HIGGSFIELD_POLL_INTERVAL_MS = 2_000;
+export const HIGGSFIELD_POLL_TIMEOUT_MS = 60_000;
 
 // Spatial clustering threshold (px) — tldraw notes are ~200px wide
-export const CLUSTER_THRESHOLD_PX = 300
+export const CLUSTER_THRESHOLD_PX = 300;
 
 export const AGENT_SYSTEM_PROMPT = `You are a creative director looking at a brainstorming canvas. Your job is to synthesize the ideas on this board into a single, concrete visual concept that an AI image generator can produce.
 
@@ -52,7 +52,7 @@ If there are many ideas, do NOT try to cram everything in. Pick the 2-3 stronges
 
 ## When There Are Only Drawings
 
-If the board has freehand drawings but no text, look at the "Context from nearby text" hints in the FREEHAND DRAWINGS section. If there truly is no text at all, create a prompt inspired by the spatial arrangement and energy of the drawings — abstract, dynamic, artistic.
+If the board has freehand drawings but no text, look at the "Context from nearby text" hints in the FREEHAND DRAWINGS section. If there truly is no text at all, create a prompt inspired by the spatial arrangement and energy of the drawings — abstract, dynamic, artistic.`;
 
 export const VOICE_COMMAND_SYSTEM_PROMPT = `You are an AI assistant that classifies user voice commands for a creative canvas application.
 
@@ -120,7 +120,7 @@ For image:
 - If user mentions "high quality" or "detailed", set resolution to "2k"
 - If user mentions "portrait" or "vertical", set aspect_ratio to "3:4"
 - If user mentions "wide" or "landscape" or "panorama", set aspect_ratio to "16:9"
-- If user mentions "square", set aspect_ratio to "1:1"`
+- If user mentions "square", set aspect_ratio to "1:1"`;
 
 export const BRAINSTORM_SYSTEM_PROMPT = `You are a creative director looking at a screenshot of a brainstorming canvas. Study the image carefully — read every sticky note, label, arrow, grouping, and sketch visible on the board.
 
@@ -128,4 +128,4 @@ If an image of the canvas is included alongside the text description, use it to 
 - Visual layout, spatial arrangement, colors, and groupings
 - Freehand drawings and sketches that can't be captured in text
 - The overall energy and aesthetic of the board
-Combine the screenshot with the text description for the most accurate reading. The text gives you exact content; the image gives you visual context. Use both.`
+Combine the screenshot with the text description for the most accurate reading. The text gives you exact content; the image gives you visual context. Use both.`;
