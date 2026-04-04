@@ -1,8 +1,6 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
-import { generateBrainstormPrompt } from '../src/agent/claude'
-import { submitGeneration, pollUntilDone } from '../src/higgsfield/client'
 
 // make sure our sync durable object is made available to cloudflare
 export { TldrawDurableObject } from './TldrawDurableObject'
@@ -93,8 +91,8 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return Response.json({ ok: true, mode })
 	})
 
-	// Takes a base64 canvas screenshot, runs it through Claude Vision to generate
-	// a brainstorm prompt, then submits to Higgsfield and returns the image URL.
+	// Takes a base64 canvas screenshot, forwards to the Durable Object which
+	// runs Claude Vision → Higgsfield and broadcasts results via WebSocket.
 	.post('/api/rooms/:roomId/agent/brainstorm', async (request, env) => {
 		const { roomId } = request.params
 		if (!roomId) return error(400, 'Missing roomId')
@@ -108,25 +106,15 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
 		console.log(`[agent:brainstorm] room=${roomId}`)
 
-		// 1. Ask Claude to generate an image prompt from the canvas screenshot
-		const prompt = await generateBrainstormPrompt(
-			env.OPENROUTER_API_KEY,
-			env.OPENROUTER_MODEL,
-			image,
-			mimeType
-		)
-		console.log(`[agent:brainstorm] prompt="${prompt}"`)
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		await stub.fetch(new Request('https://do/api/agent/brainstorm', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ image, mimeType }),
+		}))
 
-		// TODO: Higgsfield integration (commented out until credentials are ready)
-		// const requestId = await submitGeneration(
-		// 	env.HIGGSFIELD_API_KEY,
-		// 	env.HIGGSFIELD_API_SECRET,
-		// 	env.HIGGSFIELD_MODEL,
-		// 	prompt
-		// )
-		// const imageUrl = await pollUntilDone(env.HIGGSFIELD_API_KEY, env.HIGGSFIELD_API_SECRET, requestId)
-
-		return Response.json({ prompt })
+		return Response.json({ ok: true })
 	})
 
 	.all('*', () => {
