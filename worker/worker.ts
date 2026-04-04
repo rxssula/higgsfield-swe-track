@@ -28,6 +28,57 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
 	// bookmarks need to extract metadata from pasted URLs:
 	.get('/api/unfurl', handleUnfurlRequest)
+
+	// --- Agent routes ---
+	// Frontend POSTs here to invoke the agent for a specific room.
+	// The agent runs Claude, then pushes actions back to all clients in the room
+	// via TLSocketRoom.sendCustomMessage() (see TldrawDurableObject.ts).
+	.post('/api/rooms/:roomId/agent/invoke', async (request) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.json().catch(() => null)
+		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
+
+		const { message, shapes, bindings, mode } = body as {
+			message?: string
+			shapes?: unknown[]
+			bindings?: unknown[]
+			mode?: string
+		}
+
+		if (!message) return error(400, 'Missing message')
+		if (!Array.isArray(shapes)) return error(400, 'Missing shapes array')
+		if (!Array.isArray(bindings)) return error(400, 'Missing bindings array')
+
+		// TODO (Milestone 3-5): call AgentEngine.handleInvoke(), then broadcast
+		// results via room stub → TldrawDurableObject.broadcastAgentActions()
+		console.log(`[agent:invoke] room=${roomId} mode=${mode ?? 'observer'} message="${message}" shapes=${shapes.length}`)
+
+		return Response.json({ ok: true })
+	})
+
+	// Frontend POSTs here to switch the agent's behavior mode for a room.
+	.post('/api/rooms/:roomId/agent/set-mode', async (request) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.json().catch(() => null)
+		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
+
+		const { mode } = body as { mode?: string }
+		const validModes = ['observer', 'collaborator', 'facilitator']
+		if (!mode || !validModes.includes(mode)) {
+			return error(400, `Invalid mode. Must be one of: ${validModes.join(', ')}`)
+		}
+
+		// TODO (Milestone 5): update AgentEngine mode for this room, broadcast
+		// agent:mode-changed via TldrawDurableObject.sendCustomMessage()
+		console.log(`[agent:set-mode] room=${roomId} mode=${mode}`)
+
+		return Response.json({ ok: true, mode })
+	})
+
 	.all('*', () => {
 		return new Response('Not found', { status: 404 })
 	})

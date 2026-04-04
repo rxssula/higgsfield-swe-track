@@ -17,5 +17,5 @@
 		"noFallthroughCasesInSwitch": true,
 		"types": ["vite/client", "./worker-configuration.d.ts"]
 	},
-	"include": ["client", "worker", "vite.config.ts"]
+	"include": ["client", "worker", "src", "vite.config.ts"]
 }
