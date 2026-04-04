@@ -47,15 +47,18 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		const body = await request.json().catch(() => null)
 		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
 
-		const { message, shapes, bindings, mode } = body as {
+		const { message, shapes, bindings, mode, image, mimeType } = body as {
 			message?: string
 			shapes?: unknown[]
 			bindings?: unknown[]
 			mode?: string
+			image?: string
+			mimeType?: string
 		}
 
-		if (!Array.isArray(shapes)) return error(400, 'Missing shapes array')
-		if (!Array.isArray(bindings)) return error(400, 'Missing bindings array')
+		if (!Array.isArray(shapes) && !image) {
+			return error(400, 'Must provide shapes array or image (base64)')
+		}
 
 		// Forward to the Durable Object — it runs the pipeline and broadcasts
 		// progress + result to all connected clients via WebSocket.
@@ -64,7 +67,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		await stub.fetch(new Request('https://do/api/agent/run', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ shapes, bindings, message, mode }),
+			body: JSON.stringify({ shapes, bindings, message, mode, image, mimeType }),
 		}))
 
 		return Response.json({ ok: true })
@@ -89,32 +92,6 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		console.log(`[agent:set-mode] room=${roomId} mode=${mode}`)
 
 		return Response.json({ ok: true, mode })
-	})
-
-	// Takes a base64 canvas screenshot, forwards to the Durable Object which
-	// runs Claude Vision → Higgsfield and broadcasts results via WebSocket.
-	.post('/api/rooms/:roomId/agent/brainstorm', async (request, env) => {
-		const { roomId } = request.params
-		if (!roomId) return error(400, 'Missing roomId')
-
-		const body = await request.json().catch(() => null)
-		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
-
-		const { image, mimeType } = body as { image?: string; mimeType?: string }
-		if (!image) return error(400, 'Missing image (base64)')
-		if (!mimeType) return error(400, 'Missing mimeType')
-
-		console.log(`[agent:brainstorm] room=${roomId}`)
-
-		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
-		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
-		await stub.fetch(new Request('https://do/api/agent/brainstorm', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ image, mimeType }),
-		}))
-
-		return Response.json({ ok: true })
 	})
 
 	.all('*', () => {

@@ -13,7 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
 import { serializeCanvasState } from "../src/canvas/serializer";
 import type { CanvasSnapshot } from "../src/canvas/types";
-import { invokeAgent, generateBrainstormPrompt } from "../src/agent/claude";
+import { invokeAgent } from "../src/agent/claude";
 import { submitGeneration, pollUntilDone } from "../src/higgsfield/client";
 
 // add custom shapes and bindings here if needed:
@@ -41,7 +41,6 @@ export class TldrawDurableObject extends DurableObject<Env> {
 	private readonly router = AutoRouter({ catch: (e) => error(e) })
 		.get("/api/connect/:roomId", (request) => this.handleConnect(request))
 		.post("/api/agent/run", (request) => this.handleAgentRun(request))
-		.post("/api/agent/brainstorm", (request) => this.handleAgentBrainstorm(request))
 		.get("/api/voice/:roomId", (request) => this.handleVoiceConnect(request));
 
 	fetch(request: Request): Response | Promise<Response> {
@@ -64,33 +63,23 @@ export class TldrawDurableObject extends DurableObject<Env> {
 	async handleAgentRun(request: IRequest) {
 		console.log("[handleAgentRun] received");
 		const body = (await request.json()) as {
-			shapes: unknown[];
-			bindings: unknown[];
+			shapes?: unknown[];
+			bindings?: unknown[];
 			message?: string;
 			mode?: string;
+			image?: string;
+			mimeType?: string;
 		};
 
 		this.ctx.waitUntil(
 			this.runAgentPipeline(
-				body.shapes,
-				body.bindings,
+				body.shapes ?? [],
+				body.bindings ?? [],
 				body.message,
 				body.mode,
+				body.image,
+				body.mimeType,
 			),
-		);
-
-		return Response.json({ ok: true });
-	}
-
-	async handleAgentBrainstorm(request: IRequest) {
-		console.log("[handleAgentBrainstorm] received");
-		const body = (await request.json()) as {
-			image: string;
-			mimeType: string;
-		};
-
-		this.ctx.waitUntil(
-			this.runBrainstormPipeline(body.image, body.mimeType),
 		);
 
 		return Response.json({ ok: true });
@@ -109,8 +98,10 @@ export class TldrawDurableObject extends DurableObject<Env> {
 		bindings: unknown[],
 		message?: string,
 		_mode?: string,
+		image?: string,
+		mimeType?: string,
 	) {
-		console.log("[pipeline] start, shapes:", shapes.length);
+		console.log("[pipeline] start, shapes:", shapes.length, "hasImage:", !!image);
 		try {
 			this.broadcast({ type: "agent:status", status: "Reading canvas..." });
 			const snapshot: CanvasSnapshot = {
@@ -126,6 +117,8 @@ export class TldrawDurableObject extends DurableObject<Env> {
 				this.env.OPENROUTER_MODEL,
 				serialized,
 				message,
+				image,
+				mimeType,
 			);
 			console.log("[pipeline] claude reply:", replyRaw);
 			// Extract JSON even if Claude wraps it in markdown code fences or prose
@@ -152,46 +145,6 @@ export class TldrawDurableObject extends DurableObject<Env> {
 			this.broadcast({ type: "agent:done", imageUrl, synthesis, prompt });
 		} catch (e) {
 			console.error("[pipeline] error:", e);
-			this.broadcast({ type: "agent:error", message: String(e) });
-		}
-	}
-
-	// Runs the brainstorm pipeline: screenshot → Claude Vision → Higgsfield → broadcast result.
-	private async runBrainstormPipeline(image: string, mimeType: string) {
-		console.log("[brainstorm-pipeline] start");
-		try {
-			this.broadcast({ type: "agent:status", status: "Analyzing screenshot..." });
-			const replyRaw = await generateBrainstormPrompt(
-				this.env.OPENROUTER_API_KEY,
-				this.env.OPENROUTER_MODEL,
-				image,
-				mimeType,
-			);
-			console.log("[brainstorm-pipeline] claude reply:", replyRaw);
-
-			const jsonMatch = replyRaw.match(/\{[\s\S]*\}/);
-			if (!jsonMatch)
-				throw new Error(`Claude did not return JSON: ${replyRaw}`);
-			const { synthesis, prompt } = JSON.parse(jsonMatch[0]);
-
-			this.broadcast({ type: "agent:status", status: "Rendering image..." });
-			const requestId = await submitGeneration(
-				this.env.HIGGSFIELD_API_KEY,
-				this.env.HIGGSFIELD_API_SECRET,
-				this.env.HIGGSFIELD_MODEL,
-				prompt,
-			);
-			console.log("[brainstorm-pipeline] higgsfield requestId:", requestId);
-			const imageUrl = await pollUntilDone(
-				this.env.HIGGSFIELD_API_KEY,
-				this.env.HIGGSFIELD_API_SECRET,
-				requestId,
-			);
-			console.log("[brainstorm-pipeline] done, imageUrl:", imageUrl);
-
-			this.broadcast({ type: "agent:done", imageUrl, synthesis, prompt });
-		} catch (e) {
-			console.error("[brainstorm-pipeline] error:", e);
 			this.broadcast({ type: "agent:error", message: String(e) });
 		}
 	}
