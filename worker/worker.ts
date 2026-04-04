@@ -147,6 +147,54 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return Response.json({ ok: true })
 	})
 
+	// ── Snapshot history routes ──
+
+	.post('/api/rooms/:roomId/snapshots/create', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.text()
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request('https://do/api/snapshots/create', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: body || '{}',
+		}))
+	})
+
+	.get('/api/rooms/:roomId/snapshots', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request('https://do/api/snapshots/list'))
+	})
+
+	.get('/api/rooms/:roomId/snapshots/:snapshotId', async (request, env) => {
+		const { roomId, snapshotId } = request.params
+		if (!roomId || !snapshotId) return error(400, 'Missing roomId or snapshotId')
+
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request(`https://do/api/snapshots/${snapshotId}`))
+	})
+
+	.post('/api/rooms/:roomId/snapshots/:snapshotId/restore', async (request, env) => {
+		const { roomId, snapshotId } = request.params
+		if (!roomId || !snapshotId) return error(400, 'Missing roomId or snapshotId')
+
+		const body = await request.text()
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request(`https://do/api/snapshots/${snapshotId}/restore`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: body || '{}',
+		}))
+	})
+
 	// Frontend POSTs here to switch the agent's behavior mode for a room.
 	.post('/api/rooms/:roomId/agent/set-mode', async (request) => {
 		const { roomId } = request.params

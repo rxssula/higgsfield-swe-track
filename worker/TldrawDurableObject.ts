@@ -2,6 +2,7 @@ import {
     DurableObjectSqliteSyncWrapper,
     SQLiteSyncStorage,
     TLSocketRoom,
+    type RoomSnapshot,
 } from "@tldraw/sync-core";
 import {
     createTLSchema,
@@ -45,6 +46,16 @@ interface HiggsfieldWebhookPayload {
     videos?: { url: string }[];
 }
 
+export interface SnapshotMeta {
+    id: string;
+    label: string;
+    trigger: string;
+    created_at: number;
+    shape_count: number;
+}
+
+const MAX_SNAPSHOTS = 50;
+
 const schema = createTLSchema({
     shapes: { ...defaultShapeSchemas },
 });
@@ -60,6 +71,122 @@ export class TldrawDurableObject extends DurableObject<Env> {
         const sql = new DurableObjectSqliteSyncWrapper(ctx.storage);
         const storage = new SQLiteSyncStorage<TLRecord>({ sql });
         this.room = new TLSocketRoom<TLRecord, void>({ schema, storage });
+        this.initSnapshotTable();
+    }
+
+    // ── Snapshot history ──
+
+    private initSnapshotTable() {
+        this.ctx.storage.sql.exec(`
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                shape_count INTEGER DEFAULT 0
+            )
+        `);
+    }
+
+    private createSnapshot(label: string, trigger: string): SnapshotMeta {
+        const id = crypto.randomUUID();
+        const created_at = Date.now();
+        const snapshot = this.room.getCurrentSnapshot();
+        const snapshot_json = JSON.stringify(snapshot);
+        const shape_count = snapshot.documents?.length ?? 0;
+
+        this.ctx.storage.sql.exec(
+            `INSERT INTO snapshots (id, label, trigger_type, created_at, snapshot_json, shape_count) VALUES (?, ?, ?, ?, ?, ?)`,
+            id, label, trigger, created_at, snapshot_json, shape_count,
+        );
+
+        // Enforce cap
+        this.ctx.storage.sql.exec(
+            `DELETE FROM snapshots WHERE id NOT IN (SELECT id FROM snapshots ORDER BY created_at DESC LIMIT ?)`,
+            MAX_SNAPSHOTS,
+        );
+
+        const meta: SnapshotMeta = { id, label, trigger, created_at, shape_count };
+        this.broadcast({ type: "history:snapshot-created", snapshot: meta });
+        return meta;
+    }
+
+    private listSnapshots(): SnapshotMeta[] {
+        const rows = this.ctx.storage.sql.exec(
+            `SELECT id, label, trigger_type, created_at, shape_count FROM snapshots ORDER BY created_at DESC`,
+        ).toArray();
+        return rows.map((r: any) => ({
+            id: r.id,
+            label: r.label,
+            trigger: r.trigger_type,
+            created_at: r.created_at,
+            shape_count: r.shape_count,
+        }));
+    }
+
+    private getSnapshotData(id: string): RoomSnapshot | null {
+        const rows = this.ctx.storage.sql.exec(
+            `SELECT snapshot_json FROM snapshots WHERE id = ?`, id,
+        ).toArray();
+        if (rows.length === 0) return null;
+        return JSON.parse(rows[0].snapshot_json as string);
+    }
+
+    private restoreSnapshot(id: string, mode: "fork" | "hard") {
+        const snapshotData = this.getSnapshotData(id);
+        if (!snapshotData) throw new Error("Snapshot not found");
+
+        if (mode === "fork") {
+            this.createSnapshot("Auto-save before restore", "auto");
+        }
+
+        this.room.loadSnapshot(snapshotData);
+
+        if (mode === "hard") {
+            const rows = this.ctx.storage.sql.exec(
+                `SELECT created_at FROM snapshots WHERE id = ?`, id,
+            ).toArray();
+            if (rows.length > 0) {
+                this.ctx.storage.sql.exec(
+                    `DELETE FROM snapshots WHERE created_at > ?`, rows[0].created_at,
+                );
+            }
+        }
+
+        this.broadcast({ type: "history:restored", snapshotId: id, mode });
+    }
+
+    private async handleCreateSnapshot(request: IRequest) {
+        const body = (await request.json().catch(() => ({}))) as { label?: string };
+        const label = body.label || "Manual checkpoint";
+        const meta = this.createSnapshot(label, "manual");
+        return Response.json({ ok: true, snapshot: meta });
+    }
+
+    private handleListSnapshots(_request: IRequest) {
+        return Response.json({ snapshots: this.listSnapshots() });
+    }
+
+    private handleGetSnapshot(request: IRequest) {
+        const id = request.params.id;
+        if (!id) return error(400, "Missing snapshot id");
+        const data = this.getSnapshotData(id);
+        if (!data) return error(404, "Snapshot not found");
+        return Response.json({ snapshot: data });
+    }
+
+    private async handleRestoreSnapshot(request: IRequest) {
+        const id = request.params.id;
+        if (!id) return error(400, "Missing snapshot id");
+        const body = (await request.json()) as { mode?: "fork" | "hard" };
+        const mode = body.mode === "hard" ? "hard" : "fork";
+        try {
+            this.restoreSnapshot(id, mode);
+            return Response.json({ ok: true });
+        } catch (e) {
+            return error(400, String(e));
+        }
     }
 
     private readonly router = AutoRouter({ catch: (e) => error(e) })
@@ -76,6 +203,19 @@ export class TldrawDurableObject extends DurableObject<Env> {
         )
         .get("/api/voice/:roomId", (request) =>
             this.handleVoiceConnect(request),
+        )
+        // Snapshot history routes
+        .post("/api/snapshots/create", (request) =>
+            this.handleCreateSnapshot(request),
+        )
+        .get("/api/snapshots/list", (request) =>
+            this.handleListSnapshots(request),
+        )
+        .get("/api/snapshots/:id", (request) =>
+            this.handleGetSnapshot(request),
+        )
+        .post("/api/snapshots/:id/restore", (request) =>
+            this.handleRestoreSnapshot(request),
         );
 
     fetch(request: Request): Response | Promise<Response> {
@@ -254,6 +394,23 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 synthesis: gen.synthesis,
                 prompt: gen.prompt,
             });
+
+            // Auto-snapshot after agent places media (delay for client sync)
+            this.ctx.waitUntil(
+                new Promise<void>((resolve) => {
+                    setTimeout(() => {
+                        try {
+                            this.createSnapshot(
+                                `AI: ${(gen.prompt ?? "generation").slice(0, 50)}`,
+                                "agent",
+                            );
+                        } catch (e) {
+                            console.error("[snapshot] auto-snapshot error:", e);
+                        }
+                        resolve();
+                    }, 3000);
+                }),
+            );
         } else if (payload.status === "failed") {
             const msg = payload.error ?? "Higgsfield generation failed";
             await this.storeGeneration({

@@ -20,6 +20,11 @@ import {
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
 import { VoiceChatManager, VoiceState } from "../voiceChat";
+import {
+    HistoryToggleButton,
+    HistoryPanel,
+    type SnapshotMeta,
+} from "../components/HistoryPanel";
 
 interface Generation {
     id: string;
@@ -46,6 +51,20 @@ export function Room() {
     const editorRef = useRef<Editor | null>(null);
     const selectionBoundsRef = useRef<PageBounds | null>(null);
     const autoDismissedRef = useRef<Set<string>>(new Set());
+    const [historyOpen, setHistoryOpen] = useState(false);
+    const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([]);
+
+    const fetchSnapshots = useCallback(() => {
+        if (!roomId) return;
+        fetch(`/api/rooms/${roomId}/snapshots`)
+            .then((r) => r.json())
+            .then((data: any) => setSnapshots(data.snapshots ?? []))
+            .catch(() => {});
+    }, [roomId]);
+
+    useEffect(() => {
+        if (historyOpen) fetchSnapshots();
+    }, [historyOpen, fetchSnapshots]);
 
     const handleDismissGeneration = useCallback(
         (generationId: string) => {
@@ -266,6 +285,10 @@ export function Room() {
                     next.delete(data.generationId);
                     return next;
                 });
+            } else if (data.type === "history:snapshot-created") {
+                setSnapshots((prev) => [data.snapshot, ...prev]);
+            } else if (data.type === "history:restored") {
+                fetchSnapshots();
             }
         },
     });
@@ -351,6 +374,11 @@ export function Room() {
             onAiSelectCancel={handleAiSelectCancel}
             onAiSelect={handleAiSelect}
             editor={editorRef.current}
+            historyOpen={historyOpen}
+            onHistoryToggle={() => setHistoryOpen((v) => !v)}
+            onHistoryClose={() => setHistoryOpen(false)}
+            snapshots={snapshots}
+            onHistoryRefresh={fetchSnapshots}
         >
             <Tldraw
                 licenseKey="tldraw-2026-07-13/WyJGSFVscnJvLSIsWyIqIl0sMTYsIjIwMjYtMDctMTMiXQ.ffAi96kEDbYvfzuY4Xc/RMVMdarp1OrXCVWE4vls8eJkZb+PdYIDEWffxFYCYEhoeCKSCn0nM2RsbS/q5DwFzg"
@@ -384,6 +412,11 @@ function RoomWrapper({
     onAiSelectCancel,
     onAiSelect,
     editor,
+    historyOpen,
+    onHistoryToggle,
+    onHistoryClose,
+    snapshots,
+    onHistoryRefresh,
 }: {
     children: ReactNode;
     roomId?: string;
@@ -393,6 +426,11 @@ function RoomWrapper({
     onAiSelectCancel: () => void;
     onAiSelect: (bounds: PageBounds) => void;
     editor: Editor | null;
+    historyOpen: boolean;
+    onHistoryToggle: () => void;
+    onHistoryClose: () => void;
+    snapshots: SnapshotMeta[];
+    onHistoryRefresh: () => void;
 }) {
     const navigate = useNavigate();
     const [toastVisible, setToastVisible] = useState(false);
@@ -477,6 +515,18 @@ function RoomWrapper({
 
             {/* Voice chat controls */}
             {roomId && <VoiceChatPanel roomId={roomId} />}
+
+            {/* History toggle + panel */}
+            <HistoryToggleButton onClick={onHistoryToggle} />
+            {roomId && (
+                <HistoryPanel
+                    open={historyOpen}
+                    onClose={onHistoryClose}
+                    roomId={roomId}
+                    snapshots={snapshots}
+                    onRefresh={onHistoryRefresh}
+                />
+            )}
 
             {/* AI area selection overlay */}
             {aiSelectMode && editor && (
