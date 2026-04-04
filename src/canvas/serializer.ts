@@ -26,6 +26,40 @@ function extractText(shape: CanvasShape): string {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
+	const dx = a.x - b.x
+	const dy = a.y - b.y
+	return Math.sqrt(dx * dx + dy * dy)
+}
+
+function findNearbyText(
+	targetShapes: CanvasShape[],
+	allShapes: CanvasShape[],
+	threshold = 500
+): string[] {
+	const textLike = allShapes.filter(
+		(s) => s.type === 'text' || s.type === 'note' || s.type === 'geo'
+	)
+	const seen = new Set<string>()
+	const results: string[] = []
+	for (const target of targetShapes) {
+		for (const t of textLike) {
+			if (seen.has(t.id)) continue
+			const text = extractText(t)
+			if (!text) continue
+			if (dist(target, t) <= threshold) {
+				seen.add(t.id)
+				results.push(`"${text}"`)
+			}
+		}
+	}
+	return results
+}
+
+// ---------------------------------------------------------------------------
 // Serializer
 // ---------------------------------------------------------------------------
 
@@ -130,7 +164,47 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 		sections.push(`CONNECTIONS (arrows):\n${lines.join('\n')}`)
 	}
 
-	// --- 7. FRAMES ---
+	// --- 7. DRAW SHAPES (freehand drawings) ---
+	const drawShapes = shapes.filter((s) => s.type === 'draw')
+	if (drawShapes.length > 0) {
+		const lines = drawShapes.map((s) => {
+			const region = getRegionLabel(s)
+			const color = typeof s.props.color === 'string' ? s.props.color : 'default'
+			const size = typeof s.props.size === 'string' ? s.props.size : 'm'
+			const segments = Array.isArray(s.props.segments) ? s.props.segments : []
+			const totalPoints = segments.reduce(
+				(sum: number, seg: any) => sum + (Array.isArray(seg?.points) ? seg.points.length : 0),
+				0
+			)
+			const complexity =
+				totalPoints > 80
+					? 'complex/detailed'
+					: totalPoints > 30
+						? 'moderate'
+						: 'simple/quick'
+			return `  - [${s.id}] freehand drawing (${complexity}, ${color}, stroke ${size}) at ${region}`
+		})
+
+		const nearbyText = findNearbyText(drawShapes, shapes)
+		const contextLine = nearbyText.length > 0
+			? `\n  Context from nearby text: ${nearbyText.join('; ')}`
+			: ''
+		sections.push(`FREEHAND DRAWINGS:\n${lines.join('\n')}${contextLine}`)
+	}
+
+	// --- 8. IMAGE SHAPES ---
+	const imageShapes = shapes.filter((s) => s.type === 'image')
+	if (imageShapes.length > 0) {
+		const lines = imageShapes.map((s) => {
+			const region = getRegionLabel(s)
+			const w = Math.round(Number(s.props.w ?? 0))
+			const h = Math.round(Number(s.props.h ?? 0))
+			return `  - [${s.id}] image ${w}×${h}px at ${region}`
+		})
+		sections.push(`IMAGES:\n${lines.join('\n')}`)
+	}
+
+	// --- 9. FRAMES ---
 	const frameShapes = shapes.filter((s) => s.type === 'frame')
 	if (frameShapes.length > 0) {
 		const lines = frameShapes.map((frame) => {
@@ -140,7 +214,7 @@ export function serializeCanvasState(snapshot: CanvasSnapshot): string {
 		sections.push(`FRAMES:\n${lines.join('\n')}`)
 	}
 
-	// --- 8. GROUPS ---
+	// --- 10. GROUPS ---
 	const groupShapes = shapes.filter((s) => s.type === 'group')
 	if (groupShapes.length > 0) {
 		const lines = groupShapes.map((group) => {
