@@ -293,6 +293,45 @@ export function Room() {
         },
     });
 
+    const svgToPngBase64 = useCallback(async (svg: string) => {
+        return new Promise<string | undefined>((resolve) => {
+            try {
+                const svgBlob = new Blob([svg], { type: "image/svg+xml" });
+                const url = URL.createObjectURL(svgBlob);
+                const image = new Image();
+                image.crossOrigin = "anonymous";
+                image.onload = () => {
+                    try {
+                        const canvas = document.createElement("canvas");
+                        canvas.width = image.width || 1024;
+                        canvas.height = image.height || 1024;
+                        const ctx = canvas.getContext("2d");
+                        if (!ctx) {
+                            resolve(undefined);
+                            return;
+                        }
+                        ctx.drawImage(image, 0, 0);
+                        const dataUrl = canvas.toDataURL("image/png");
+                        resolve(dataUrl.replace(/^data:image\/png;base64,/, ""));
+                    } catch (err) {
+                        console.warn("[AI] failed to rasterize svg", err);
+                        resolve(undefined);
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                };
+                image.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    resolve(undefined);
+                };
+                image.src = url;
+            } catch (err) {
+                console.warn("[AI] failed to convert svg", err);
+                resolve(undefined);
+            }
+        });
+    }, []);
+
     const handleAiSelect = useCallback(
         (pageBounds: PageBounds) => {
             setAiSelectMode(false);
@@ -324,16 +363,51 @@ export function Room() {
                 }
             }
 
-            fetch(`/api/rooms/${roomId}/agent/invoke`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+            (async () => {
+                let imagePayload: string | undefined;
+                let mimeType: string | undefined;
+
+                const hasDrawings = shapesInBounds.some(
+                    (shape) => shape.type === "draw",
+                );
+
+                if (hasDrawings) {
+                    try {
+                        const ids = shapesInBounds.map((shape) => shape.id);
+                        const svgExport = await editor.getSvgString(ids, {
+                            background: true,
+                            padding: 48,
+                            darkMode: true,
+                        });
+                        if (svgExport?.svg) {
+                            const png = await svgToPngBase64(svgExport.svg);
+                            if (png) {
+                                imagePayload = png;
+                                mimeType = "image/png";
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("[AI] failed to capture sketch preview", err);
+                    }
+                }
+
+                const payload: Record<string, unknown> = {
                     shapes: shapesInBounds,
                     bindings: relevantBindings,
-                }),
-            }).catch(() => {});
+                };
+                if (imagePayload && mimeType) {
+                    payload.image = imagePayload;
+                    payload.mimeType = mimeType;
+                }
+
+                fetch(`/api/rooms/${roomId}/agent/invoke`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }).catch(() => {});
+            })();
         },
-        [roomId],
+        [roomId, svgToPngBase64],
     );
 
     const handleAiSelectStart = useCallback(() => {
