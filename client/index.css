@@ -1,123 +1,213 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-@import url('tldraw/tldraw.css');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("tldraw/tldraw.css");
 @import "tailwindcss";
 
+html,
 body {
-	font-family: 'Inter', sans-serif;
-	overscroll-behavior: none;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+body {
+    font-family: "Inter", sans-serif;
+}
+
+#root {
+    height: 100%;
+    overflow: hidden;
 }
 
 /* ── Room shell ── */
 .room-shell {
-	display: flex;
-	flex-direction: column;
-	position: absolute;
-	inset: 0;
+    position: absolute;
+    inset: 0;
 }
 
-.room-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 8px 16px;
-	background: #0a0a0a;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-	position: relative;
-	z-index: 50;
+/* ── Back button ── */
+.room-back-button {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(13, 13, 13, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    color: rgba(255, 255, 255, 0.5);
 }
 
-/* Subtle accent glow behind header */
-.room-header::before {
-	content: '';
-	position: absolute;
-	top: 0;
-	left: 50%;
-	transform: translateX(-50%);
-	width: 300px;
-	height: 100%;
-	background: radial-gradient(ellipse at center, rgba(200, 255, 0, 0.04) 0%, transparent 70%);
-	pointer-events: none;
+.room-back-button:hover {
+    border-color: rgba(200, 255, 0, 0.3);
+    background: rgba(13, 13, 13, 0.92);
+    color: #c8ff00;
+    box-shadow:
+        0 0 0 1px rgba(200, 255, 0, 0.06),
+        0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
-/* Live dot pulse */
-.room-live-dot {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: #c8ff00;
-	box-shadow: 0 0 8px rgba(200, 255, 0, 0.5);
-	animation: room-pulse 2s ease-in-out infinite;
-	flex-shrink: 0;
+.room-back-button:active {
+    transform: scale(0.95);
 }
 
-@keyframes room-pulse {
-	0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(200, 255, 0, 0.5); }
-	50% { opacity: 0.5; box-shadow: 0 0 4px rgba(200, 255, 0, 0.2); }
+/* ── Floating room ID chip ── */
+.room-id-chip {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 100px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(13, 13, 13, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: all;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
 }
 
-/* Copy button */
-.room-copy-btn {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 6px 12px;
-	border-radius: 10px;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	background: rgba(255, 255, 255, 0.03);
-	cursor: pointer;
-	transition: all 0.2s ease;
+.room-id-chip:hover {
+    border-color: rgba(200, 255, 0, 0.3);
+    background: rgba(13, 13, 13, 0.92);
+    box-shadow:
+        0 0 0 1px rgba(200, 255, 0, 0.06),
+        0 4px 20px rgba(0, 0, 0, 0.4),
+        0 0 40px rgba(200, 255, 0, 0.04);
 }
 
-.room-copy-btn:hover {
-	background: rgba(200, 255, 0, 0.05);
-	border-color: rgba(200, 255, 0, 0.2);
-	box-shadow: 0 0 16px rgba(200, 255, 0, 0.06);
+.room-id-chip:hover .room-id-icon {
+    color: #c8ff00;
 }
 
-/* Canvas area */
+.room-id-chip:active {
+    transform: translateX(-50%) scale(0.97);
+}
+
+.room-id-text {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.5);
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.room-id-icon {
+    color: rgba(255, 255, 255, 0.25);
+    transition: color 0.2s ease;
+    flex-shrink: 0;
+}
+
+/* ── Toast notification ── */
+.room-toast {
+    position: absolute;
+    top: 56px;
+    left: 50%;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 10px;
+    background: rgba(200, 255, 0, 0.12);
+    border: 1px solid rgba(200, 255, 0, 0.2);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    color: #c8ff00;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -8px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.room-toast--visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+/* ── Canvas area (full bleed) ── */
 .room-canvas {
-	position: relative;
-	flex: 1;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.tlui-menu-zone {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+    z-index: 500;
+    border-radius: 10px;
+    border: 1px solid #1f1f1f;
+}
+
+.tlui-menu-zone .tlui-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 /* ── tldraw dark theme overrides to match COLLABDRAW palette ── */
 .tl-theme__dark {
-	--tl-color-background: #0d0d0d;
-	--tl-color-grid: hsl(68, 100%, 50%, 12%);
+    --tl-color-background: #0d0d0d;
+    --tl-color-grid: hsl(68, 100%, 50%, 12%);
 
-	/* Panels & surfaces — dark with slight warm shift */
-	--tl-color-low: #111111;
-	--tl-color-low-border: #1a1a1a;
-	--tl-color-panel: #131313;
-	--tl-color-panel-contrast: #222222;
-	--tl-color-panel-overlay: hsla(0, 0%, 8%, 85%);
-	--tl-color-divider: #1f1f1f;
-	--tl-color-culled: #1a1a1a;
+    /* Panels & surfaces — dark with slight warm shift */
+    --tl-color-low: #111111;
+    --tl-color-low-border: #1a1a1a;
+    --tl-color-panel: #131313;
+    --tl-color-panel-contrast: #222222;
+    --tl-color-panel-overlay: hsla(0, 0%, 8%, 85%);
+    --tl-color-divider: #1f1f1f;
+    --tl-color-culled: #1a1a1a;
 
-	/* Muted fills */
-	--tl-color-muted-0: hsl(68, 30%, 50%, 2%);
-	--tl-color-muted-1: hsl(68, 30%, 50%, 8%);
-	--tl-color-muted-2: hsl(68, 30%, 50%, 4%);
-	--tl-color-hint: hsl(68, 30%, 50%, 6%);
+    /* Muted fills */
+    --tl-color-muted-0: hsl(68, 30%, 50%, 2%);
+    --tl-color-muted-1: hsl(68, 30%, 50%, 8%);
+    --tl-color-muted-2: hsl(68, 30%, 50%, 4%);
+    --tl-color-hint: hsl(68, 30%, 50%, 6%);
 
-	/* Selection — lime accent instead of blue */
-	--tl-color-selected: #c8ff00;
-	--tl-color-selected-contrast: #0a0a0a;
-	--tl-color-selection-fill: hsl(68, 100%, 50%, 12%);
-	--tl-color-selection-stroke: #c8ff00;
-	--tl-color-focus: hsl(68, 80%, 65%);
-	--tl-color-primary: #c8ff00;
-	--tl-color-brush-fill: hsl(68, 100%, 50%, 5%);
-	--tl-color-brush-stroke: hsl(68, 100%, 50%, 20%);
+    /* Selection — lime accent instead of blue */
+    --tl-color-selected: #c8ff00;
+    --tl-color-selected-contrast: #0a0a0a;
+    --tl-color-selection-fill: hsl(68, 100%, 50%, 12%);
+    --tl-color-selection-stroke: #c8ff00;
+    --tl-color-focus: hsl(68, 80%, 65%);
+    --tl-color-primary: #c8ff00;
+    --tl-color-brush-fill: hsl(68, 100%, 50%, 5%);
+    --tl-color-brush-stroke: hsl(68, 100%, 50%, 20%);
 
-	/* Shadows — deeper for true-black feel */
-	--tl-shadow-1:
-		0px 1px 2px hsl(0, 0%, 0%, 30%), 0px 1px 3px hsl(0, 0%, 0%, 35%),
-		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
-	--tl-shadow-2:
-		0px 1px 3px hsl(0, 0%, 0%, 70%), 0px 2px 6px hsl(0, 0%, 0%, 40%),
-		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
-	--tl-shadow-3:
-		0px 1px 3px hsl(0, 0%, 0%, 60%), 0px 2px 12px hsl(0, 0%, 0%, 55%),
-		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
+    /* Shadows — deeper for true-black feel */
+    --tl-shadow-1:
+        0px 1px 2px hsl(0, 0%, 0%, 30%), 0px 1px 3px hsl(0, 0%, 0%, 35%),
+        inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
+    --tl-shadow-2:
+        0px 1px 3px hsl(0, 0%, 0%, 70%), 0px 2px 6px hsl(0, 0%, 0%, 40%),
+        inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
+    --tl-shadow-3:
+        0px 1px 3px hsl(0, 0%, 0%, 60%), 0px 2px 12px hsl(0, 0%, 0%, 55%),
+        inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
 }
