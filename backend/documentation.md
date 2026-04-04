@@ -1620,13 +1620,13 @@ broadcastAgentActions(result: AgentResponse) {
 
 ### Milestone 2: Canvas Serializer
 
-- [ ] `CanvasSnapshot` type (`CanvasShape[]` + `CanvasBinding[]`) — local types, no tldraw import
-- [ ] `findClusters()` — proximity clustering (300px threshold for tldraw note size)
-- [ ] `getRegionLabel()` — infinite canvas (coordinate quadrant + raw coords)
-- [ ] `serializeCanvasState()` — 8-section output
-- [ ] `richText` ProseMirror extraction
-- [ ] Arrow resolution via bindings
-- [ ] `index.ts` updated to store snapshot per session
+- [x] `src/canvas/types.ts` — `CanvasShape`, `CanvasBinding`, `CanvasSnapshot` (local types, no tldraw import)
+- [x] `src/canvas/spatial.ts` — `getRegionLabel()`, `findClusters()` (greedy expansion, 300px threshold)
+- [x] `src/canvas/serializer.ts` — `serializeCanvasState()` with all 8 sections
+- [x] `richText` ProseMirror extraction (`extractRichText` recursive walk)
+- [x] Arrow resolution via bindings (terminal "start" → source, terminal "end" → target)
+- [x] Wired into `worker/worker.ts` stub — serialized output logged on every invoke
+- [ ] Verify: send a canvas snapshot via POST, confirm serialized text appears in `wrangler dev` logs
 
 ### Milestone 3: Claude Integration
 

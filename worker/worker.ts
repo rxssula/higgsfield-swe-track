@@ -1,6 +1,8 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
+import { serializeCanvasState } from '../src/canvas/serializer'
+import type { CanvasSnapshot } from '../src/canvas/types'
 
 // make sure our sync durable object is made available to cloudflare
 export { TldrawDurableObject } from './TldrawDurableObject'
@@ -51,9 +53,13 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		if (!Array.isArray(shapes)) return error(400, 'Missing shapes array')
 		if (!Array.isArray(bindings)) return error(400, 'Missing bindings array')
 
+		const snapshot: CanvasSnapshot = { shapes: shapes as any, bindings: bindings as any }
+		const serialized = serializeCanvasState(snapshot)
+
 		// TODO (Milestone 3-5): call AgentEngine.handleInvoke(), then broadcast
 		// results via room stub → TldrawDurableObject.broadcastAgentActions()
 		console.log(`[agent:invoke] room=${roomId} mode=${mode ?? 'observer'} message="${message}" shapes=${shapes.length}`)
+		console.log('[canvas:serialized]\n', serialized)
 
 		return Response.json({ ok: true })
 	})
