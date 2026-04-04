@@ -6,16 +6,32 @@ import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
 import { VoiceChatManager, VoiceState } from "../voiceChat";
 
+type AgentState =
+	| { status: 'idle' }
+	| { status: 'working'; message: string }
+	| { status: 'done'; imageUrl: string; synthesis: string }
+	| { status: 'error'; message: string }
+
 export function Room() {
 	const { roomId } = useParams<{ roomId: string }>();
+	const [agentState, setAgentState] = useState<AgentState>({ status: 'idle' });
 
 	const store = useSync({
 		uri: `${window.location.origin}/api/connect/${roomId}`,
 		assets: multiplayerAssetStore,
+		onCustomMessageReceived: (data: any) => {
+			if (data.type === 'agent:status') {
+				setAgentState({ status: 'working', message: data.status });
+			} else if (data.type === 'agent:done') {
+				setAgentState({ status: 'done', imageUrl: data.imageUrl, synthesis: data.synthesis });
+			} else if (data.type === 'agent:error') {
+				setAgentState({ status: 'error', message: data.message });
+			}
+		},
 	});
 
 	return (
-		<RoomWrapper roomId={roomId}>
+		<RoomWrapper roomId={roomId} agentState={agentState} onAgentDismiss={() => setAgentState({ status: 'idle' })}>
 			<Tldraw
 				licenseKey="tldraw-2026-07-13/WyJGSFVscnJvLSIsWyIqIl0sMTYsIjIwMjYtMDctMTMiXQ.ffAi96kEDbYvfzuY4Xc/RMVMdarp1OrXCVWE4vls8eJkZb+PdYIDEWffxFYCYEhoeCKSCn0nM2RsbS/q5DwFzg"
 				store={store}
@@ -42,9 +58,13 @@ export function Room() {
 function RoomWrapper({
 	children,
 	roomId,
+	agentState,
+	onAgentDismiss,
 }: {
 	children: ReactNode;
 	roomId?: string;
+	agentState: AgentState;
+	onAgentDismiss: () => void;
 }) {
 	const navigate = useNavigate();
 	const [toastVisible, setToastVisible] = useState(false);
@@ -129,6 +149,41 @@ function RoomWrapper({
 
 			{/* Voice chat controls */}
 			{roomId && <VoiceChatPanel roomId={roomId} />}
+
+			{/* Agent status overlay */}
+			{agentState.status !== 'idle' && (
+				<div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-xl border border-white/10 bg-[#111] p-4 shadow-2xl">
+					{agentState.status === 'working' && (
+						<div className="flex items-center gap-3 text-white/70 text-sm">
+							<div className="h-2 w-2 rounded-full bg-[#c8ff00] animate-pulse" />
+							{agentState.message}
+						</div>
+					)}
+					{agentState.status === 'done' && (
+						<div className="flex flex-col gap-2">
+							<img src={agentState.imageUrl} alt="Generated" className="rounded-lg w-full" />
+							<p className="text-white/50 text-xs">{agentState.synthesis}</p>
+							<button
+								onClick={onAgentDismiss}
+								className="text-xs text-white/30 hover:text-white/60 transition-colors self-end"
+							>
+								dismiss
+							</button>
+						</div>
+					)}
+					{agentState.status === 'error' && (
+						<div className="flex items-center justify-between gap-3">
+							<p className="text-red-400 text-sm">{agentState.message}</p>
+							<button
+								onClick={onAgentDismiss}
+								className="text-xs text-white/30 hover:text-white/60 transition-colors"
+							>
+								dismiss
+							</button>
+						</div>
+					)}
+				</div>
+			)}
 
 			{/* Full-bleed canvas */}
 			<div className="room-canvas">{children}</div>

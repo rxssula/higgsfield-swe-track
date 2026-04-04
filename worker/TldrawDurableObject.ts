@@ -1,22 +1,26 @@
-import { DurableObjectSqliteSyncWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import {
+	DurableObjectSqliteSyncWrapper,
+	SQLiteSyncStorage,
+	TLSocketRoom,
+} from "@tldraw/sync-core";
 import {
 	createTLSchema,
 	// defaultBindingSchemas,
 	defaultShapeSchemas,
 	TLRecord,
-} from '@tldraw/tlschema'
-import { DurableObject } from 'cloudflare:workers'
-import { AutoRouter, error, IRequest } from 'itty-router'
-import { serializeCanvasState } from '../src/canvas/serializer'
-import type { CanvasSnapshot } from '../src/canvas/types'
-import { invokeAgent } from '../src/agent/claude'
-import { submitGeneration, pollUntilDone } from '../src/higgsfield/client'
+} from "@tldraw/tlschema";
+import { DurableObject } from "cloudflare:workers";
+import { AutoRouter, error, IRequest } from "itty-router";
+import { serializeCanvasState } from "../src/canvas/serializer";
+import type { CanvasSnapshot } from "../src/canvas/types";
+import { invokeAgent } from "../src/agent/claude";
+import { submitGeneration, pollUntilDone } from "../src/higgsfield/client";
 
 // add custom shapes and bindings here if needed:
 const schema = createTLSchema({
 	shapes: { ...defaultShapeSchemas },
 	// bindings: { ...defaultBindingSchemas },
-})
+});
 
 // Each whiteboard room is hosted in a Durable Object.
 // https://developers.cloudflare.com/durable-objects/
@@ -24,58 +28,63 @@ const schema = createTLSchema({
 // There's only ever one durable object instance per room. Room state is
 // persisted automatically to SQLite via ctx.storage.
 export class TldrawDurableObject extends DurableObject<Env> {
-	private room: TLSocketRoom<TLRecord, void>
-	private voiceSessions = new Map<string, WebSocket>()
+	private room: TLSocketRoom<TLRecord, void>;
+	private voiceSessions = new Map<string, WebSocket>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env)
-		const sql = new DurableObjectSqliteSyncWrapper(ctx.storage)
-		const storage = new SQLiteSyncStorage<TLRecord>({ sql })
-		this.room = new TLSocketRoom<TLRecord, void>({ schema, storage })
+		super(ctx, env);
+		const sql = new DurableObjectSqliteSyncWrapper(ctx.storage);
+		const storage = new SQLiteSyncStorage<TLRecord>({ sql });
+		this.room = new TLSocketRoom<TLRecord, void>({ schema, storage });
 	}
 
 	private readonly router = AutoRouter({ catch: (e) => error(e) })
-		.get('/api/connect/:roomId', (request) => this.handleConnect(request))
-		.post('/api/agent/run', (request) => this.handleAgentRun(request))
-		// .get('/api/voice/:roomId', (request) => this.handleVoiceConnect(request))
+		.get("/api/connect/:roomId", (request) => this.handleConnect(request))
+		.post("/api/agent/run", (request) => this.handleAgentRun(request))
+		.get("/api/voice/:roomId", (request) => this.handleVoiceConnect(request));
 
 	fetch(request: Request): Response | Promise<Response> {
-		return this.router.fetch(request)
+		return this.router.fetch(request);
 	}
 
 	async handleConnect(request: IRequest) {
-		const sessionId = request.query.sessionId as string
-		if (!sessionId) return error(400, 'Missing sessionId')
+		const sessionId = request.query.sessionId as string;
+		if (!sessionId) return error(400, "Missing sessionId");
 
-		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair()
-		serverWebSocket.accept()
-		this.room.handleSocketConnect({ sessionId, socket: serverWebSocket })
+		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair();
+		serverWebSocket.accept();
+		this.room.handleSocketConnect({ sessionId, socket: serverWebSocket });
 
-		return new Response(null, { status: 101, webSocket: clientWebSocket })
+		return new Response(null, { status: 101, webSocket: clientWebSocket });
 	}
 
 	// Receives the agent invocation from worker.ts, kicks off the pipeline
 	// async and returns immediately — results are pushed via WebSocket.
 	async handleAgentRun(request: IRequest) {
-		console.log('[handleAgentRun] received')
-		const body = await request.json() as {
-			shapes: unknown[]
-			bindings: unknown[]
-			message?: string
-			mode?: string
-		}
+		console.log("[handleAgentRun] received");
+		const body = (await request.json()) as {
+			shapes: unknown[];
+			bindings: unknown[];
+			message?: string;
+			mode?: string;
+		};
 
 		this.ctx.waitUntil(
-			this.runAgentPipeline(body.shapes, body.bindings, body.message, body.mode)
-		)
+			this.runAgentPipeline(
+				body.shapes,
+				body.bindings,
+				body.message,
+				body.mode,
+			),
+		);
 
-		return Response.json({ ok: true })
+		return Response.json({ ok: true });
 	}
 
 	// Broadcasts a message to every connected session in the room.
 	private broadcast(data: object) {
 		for (const session of this.room.getSessions()) {
-			this.room.sendCustomMessage(session.sessionId, data)
+			this.room.sendCustomMessage(session.sessionId, data);
 		}
 	}
 
@@ -84,108 +93,113 @@ export class TldrawDurableObject extends DurableObject<Env> {
 		shapes: unknown[],
 		bindings: unknown[],
 		message?: string,
-		_mode?: string
+		_mode?: string,
 	) {
-		console.log('[pipeline] start, shapes:', shapes.length)
+		console.log("[pipeline] start, shapes:", shapes.length);
 		try {
-			this.broadcast({ type: 'agent:status', status: 'Reading canvas...' })
-			const snapshot: CanvasSnapshot = { shapes: shapes as any, bindings: bindings as any }
-			const serialized = serializeCanvasState(snapshot)
-			console.log('[pipeline] serialized canvas:\n', serialized)
+			this.broadcast({ type: "agent:status", status: "Reading canvas..." });
+			const snapshot: CanvasSnapshot = {
+				shapes: shapes as any,
+				bindings: bindings as any,
+			};
+			const serialized = serializeCanvasState(snapshot);
+			console.log("[pipeline] serialized canvas:\n", serialized);
 
-			this.broadcast({ type: 'agent:status', status: 'Generating prompt...' })
+			this.broadcast({ type: "agent:status", status: "Generating prompt..." });
 			const replyRaw = await invokeAgent(
 				this.env.OPENROUTER_API_KEY,
 				this.env.OPENROUTER_MODEL,
 				serialized,
-				message
-			)
-			console.log('[pipeline] claude reply:', replyRaw)
+				message,
+			);
+			console.log("[pipeline] claude reply:", replyRaw);
 			// Extract JSON even if Claude wraps it in markdown code fences or prose
-			const jsonMatch = replyRaw.match(/\{[\s\S]*\}/)
-			if (!jsonMatch) throw new Error(`Claude did not return JSON: ${replyRaw}`)
-			const { synthesis, prompt } = JSON.parse(jsonMatch[0])
+			const jsonMatch = replyRaw.match(/\{[\s\S]*\}/);
+			if (!jsonMatch)
+				throw new Error(`Claude did not return JSON: ${replyRaw}`);
+			const { synthesis, prompt } = JSON.parse(jsonMatch[0]);
 
-			this.broadcast({ type: 'agent:status', status: 'Rendering image...' })
+			this.broadcast({ type: "agent:status", status: "Rendering image..." });
 			const requestId = await submitGeneration(
 				this.env.HIGGSFIELD_API_KEY,
 				this.env.HIGGSFIELD_API_SECRET,
 				this.env.HIGGSFIELD_MODEL,
-				prompt
-			)
-			console.log('[pipeline] higgsfield requestId:', requestId)
+				prompt,
+			);
+			console.log("[pipeline] higgsfield requestId:", requestId);
 			const imageUrl = await pollUntilDone(
 				this.env.HIGGSFIELD_API_KEY,
 				this.env.HIGGSFIELD_API_SECRET,
-				requestId
-			)
-			console.log('[pipeline] done, imageUrl:', imageUrl)
+				requestId,
+			);
+			console.log("[pipeline] done, imageUrl:", imageUrl);
 
-			this.broadcast({ type: 'agent:done', imageUrl, synthesis, prompt })
+			this.broadcast({ type: "agent:done", imageUrl, synthesis, prompt });
 		} catch (e) {
-			console.error('[pipeline] error:', e)
-			this.broadcast({ type: 'agent:error', message: String(e) })
-=======
+			console.error("[pipeline] error:", e);
+			this.broadcast({ type: "agent:error", message: String(e) });
+		}
+	}
+
 	// ── Voice chat signaling ──
 
 	async handleVoiceConnect(request: IRequest) {
-		const sessionId = request.query.sessionId as string
-		if (!sessionId) return error(400, 'Missing sessionId')
+		const sessionId = request.query.sessionId as string;
+		if (!sessionId) return error(400, "Missing sessionId");
 
-		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair()
-		serverWebSocket.accept()
+		const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair();
+		serverWebSocket.accept();
 
-		const currentPeers = Array.from(this.voiceSessions.keys())
+		const currentPeers = Array.from(this.voiceSessions.keys());
 		serverWebSocket.send(
-			JSON.stringify({ type: 'voice-peers', peers: currentPeers }),
-		)
+			JSON.stringify({ type: "voice-peers", peers: currentPeers }),
+		);
 
-		this.voiceSessions.set(sessionId, serverWebSocket)
-		this.broadcastVoice({ type: 'voice-join', sessionId }, sessionId)
+		this.voiceSessions.set(sessionId, serverWebSocket);
+		this.broadcastVoice({ type: "voice-join", sessionId }, sessionId);
 
-		serverWebSocket.addEventListener('message', (event) => {
+		serverWebSocket.addEventListener("message", (event) => {
 			try {
-				const msg = JSON.parse(event.data as string)
+				const msg = JSON.parse(event.data as string);
 
-				if (msg.type === 'voice-leave') {
-					this.voiceSessions.delete(sessionId)
-					this.broadcastVoice({ type: 'voice-leave', sessionId })
-					serverWebSocket.close()
-					return
+				if (msg.type === "voice-leave") {
+					this.voiceSessions.delete(sessionId);
+					this.broadcastVoice({ type: "voice-leave", sessionId });
+					serverWebSocket.close();
+					return;
 				}
 
 				if (msg.to) {
-					const target = this.voiceSessions.get(msg.to)
+					const target = this.voiceSessions.get(msg.to);
 					if (target && target.readyState === 1) {
-						target.send(JSON.stringify(msg))
+						target.send(JSON.stringify(msg));
 					}
 				}
 			} catch {
 				/* ignore malformed messages */
 			}
-		})
+		});
 
-		serverWebSocket.addEventListener('close', () => {
-			this.voiceSessions.delete(sessionId)
-			this.broadcastVoice({ type: 'voice-leave', sessionId })
-		})
+		serverWebSocket.addEventListener("close", () => {
+			this.voiceSessions.delete(sessionId);
+			this.broadcastVoice({ type: "voice-leave", sessionId });
+		});
 
-		serverWebSocket.addEventListener('error', () => {
-			this.voiceSessions.delete(sessionId)
-			this.broadcastVoice({ type: 'voice-leave', sessionId })
-		})
+		serverWebSocket.addEventListener("error", () => {
+			this.voiceSessions.delete(sessionId);
+			this.broadcastVoice({ type: "voice-leave", sessionId });
+		});
 
-		return new Response(null, { status: 101, webSocket: clientWebSocket })
+		return new Response(null, { status: 101, webSocket: clientWebSocket });
 	}
 
 	private broadcastVoice(msg: object, excludeId?: string) {
-		const data = JSON.stringify(msg)
+		const data = JSON.stringify(msg);
 		for (const [id, socket] of this.voiceSessions) {
-			if (id === excludeId) continue
+			if (id === excludeId) continue;
 			if (socket.readyState === 1) {
-				socket.send(data)
+				socket.send(data);
 			}
->>>>>>> 3bebf14d5ee058e69557dd3ef67b291cb61653c1
 		}
 	}
 }
