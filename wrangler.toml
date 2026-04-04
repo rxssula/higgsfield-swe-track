@@ -6,10 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
 preview_urls = true
 
-[[routes]]
-pattern = "multiplayer.templates.tldraw.dev"
-custom_domain = true
-
 [observability]
 enabled = true
 
@@ -32,6 +28,5 @@ new_sqlite_classes = ["TldrawDurableObject"]
 # We store asset uploads (images, videos) in an R2 bucket.
 # Room data is stored in Durable Object SQLite storage.
 [[r2_buckets]]
-binding = 'TLDRAW_BUCKET'
-bucket_name = 'multiplayer-template'
-preview_bucket_name = 'multiplayer-template-preview'
+bucket_name = "multiplayer-template-preview"
+binding = "multiplayer_template_preview"
