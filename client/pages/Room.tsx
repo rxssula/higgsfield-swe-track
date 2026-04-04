@@ -1,6 +1,6 @@
 import { useSync } from '@tldraw/sync'
 import { ReactNode, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { Tldraw } from 'tldraw'
 import { getBookmarkPreview } from '../getBookmarkPreview'
 import { multiplayerAssetStore } from '../multiplayerAssetStore'
@@ -25,6 +25,11 @@ export function Room() {
                 store={store}
                 options={{ deepLinks: true }}
                 onMount={(editor) => {
+                    // default to dark theme to match site aesthetic — user can still toggle
+                    const prefs = editor.user.getUserPreferences()
+                    if (!prefs.colorScheme || prefs.colorScheme === 'light') {
+                        editor.user.updateUserPreferences({ colorScheme: 'dark' })
+                    }
                     // when the editor is ready, we need to register our bookmark unfurling service
                     editor.registerExternalAssetHandler('url', getBookmarkPreview)
                 }}
@@ -35,6 +40,7 @@ export function Room() {
 
 function RoomWrapper({ children, roomId }: { children: ReactNode; roomId?: string }) {
     const [didCopy, setDidCopy] = useState(false)
+    const navigate = useNavigate()
 
     useEffect(() => {
         if (!didCopy) return
@@ -43,42 +49,66 @@ function RoomWrapper({ children, roomId }: { children: ReactNode; roomId?: strin
     }, [didCopy])
 
     return (
-        <div className="RoomWrapper">
-            <div className="RoomWrapper-header">
-                <WifiIcon />
-                <div>{roomId}</div>
+        <div className="room-shell">
+            {/* Header bar */}
+            <div className="room-header">
+                {/* Left: back + brand */}
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => navigate('/')}
+                        className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/10 flex items-center justify-center text-white/50 hover:text-[#c8ff00] hover:border-[#c8ff00]/30 transition-all duration-200 cursor-pointer"
+                        aria-label="Back to home"
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 12H5" />
+                            <path d="M12 19l-7-7 7-7" />
+                        </svg>
+                    </button>
+                    <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#c8ff00] to-[#a0cc00] flex items-center justify-center shadow-[0_0_12px_rgba(200,255,0,0.15)]">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0a0a0a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 19l7-7 3 3-7 7-3-3z" />
+                                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+                                <path d="M2 2l7.586 7.586" />
+                                <circle cx="11" cy="11" r="2" />
+                            </svg>
+                        </div>
+                        <span className="text-sm font-bold tracking-tight">
+                            <span className="text-white">COLLAB</span>
+                            <span className="text-[#c8ff00]">DRAW</span>
+                        </span>
+                    </div>
+                </div>
+
+                {/* Center: room id with live indicator */}
+                <div className="flex items-center gap-2.5">
+                    <div className="room-live-dot" />
+                    <span className="text-white/40 text-xs font-medium tracking-wide truncate max-w-[200px] sm:max-w-[300px]">
+                        {roomId}
+                    </span>
+                </div>
+
+                {/* Right: copy link */}
                 <button
-                    className="RoomWrapper-copy"
+                    className="room-copy-btn group"
                     onClick={() => {
                         navigator.clipboard.writeText(window.location.href)
                         setDidCopy(true)
                     }}
                     aria-label="copy room link"
                 >
-                    Copy link
-                    {didCopy && <div className="RoomWrapper-copied">Copied!</div>}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 group-hover:text-[#c8ff00] transition-colors duration-200">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span className="text-xs font-medium text-white/50 group-hover:text-[#c8ff00] transition-colors duration-200">
+                        {didCopy ? 'Copied!' : 'Copy link'}
+                    </span>
                 </button>
             </div>
-            <div className="RoomWrapper-content">{children}</div>
-        </div>
-    )
-}
 
-function WifiIcon() {
-    return (
-        <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth="1.5"
-            stroke="currentColor"
-            width={16}
-        >
-            <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M8.288 15.038a5.25 5.25 0 0 1 7.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 0 1 1.06 0Z"
-            />
-        </svg>
+            {/* Canvas */}
+            <div className="room-canvas">{children}</div>
+        </div>
     )
 }

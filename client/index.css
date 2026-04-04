@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('tldraw/tldraw.css');
 @import "tailwindcss";
 
@@ -7,83 +7,117 @@ body {
 	overscroll-behavior: none;
 }
 
-.RoomWrapper {
-	--background: white;
-	--text: hsl(0, 0%, 20%);
-	--gray-light: #f5f5f5;
-	--gray-dark: #e5e5e5;
-	--black-transparent-lighter: rgba(0, 0, 0, 0.15);
-	--black-transparent-light: rgba(0, 0, 0, 0.4);
-	--black-transparent-dark: rgba(0, 0, 0, 0.6);
-	--black-transparent-darker: rgba(0, 0, 0, 0.7);
-	--focus: hsl(217, 89%, 61%);
-	--whiteboard: hsl(240, 5%, 96%);
-	color-scheme: light;
-}
-
-:root:has(.tl-theme__dark) .RoomWrapper {
-	--background: black;
-	--text: hsl(0, 9%, 94%);
-	--gray-light: #333;
-	--gray-dark: #444;
-	--black-transparent-lighter: rgba(255, 255, 255, 0.15);
-	--black-transparent-light: rgba(255, 255, 255, 0.4);
-	--black-transparent-dark: rgba(255, 255, 255, 0.6);
-	--black-transparent-darker: rgba(255, 255, 255, 0.7);
-	--focus: hsl(217, 89%, 61%);
-	--whiteboard: hsl(240, 5%, 6.5%);
-	color-scheme: dark;
-}
-
-.RoomWrapper {
+/* ── Room shell ── */
+.room-shell {
 	display: flex;
 	flex-direction: column;
 	position: absolute;
-	inset: 0px;
-}
-
-.RoomWrapper-header {
-	display: flex;
-	flex-direction: row;
-	justify-content: flex-start;
-	align-items: center;
-	padding: 8px 16px;
-	gap: 16px;
-	background: var(--background);
-	border-bottom: 1px solid var(--gray-dark);
-	color: var(--text);
-	font-size: 14px;
-}
-
-.RoomWrapper-copy {
-	background: var(--black-transparent-lighter);
-	border: 1px solid var(--gray-dark);
-	border-radius: 4px;
-	padding: 4px 12px;
-	height: 24px;
-	cursor: pointer;
-	position: relative;
-	text-align: center;
-}
-
-.RoomWrapper-copy:has(.RoomWrapper-copied) {
-	color: transparent;
-}
-
-.RoomWrapper-copied {
-	color: var(--text);
-	position: absolute;
 	inset: 0;
+}
+
+.room-header {
 	display: flex;
 	align-items: center;
-	justify-content: center;
+	justify-content: space-between;
+	padding: 8px 16px;
+	background: #0a0a0a;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	position: relative;
+	z-index: 50;
 }
 
-.RoomWrapper-copy:hover {
-	border: 1px solid var(--black-transparent-lighter);
+/* Subtle accent glow behind header */
+.room-header::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 300px;
+	height: 100%;
+	background: radial-gradient(ellipse at center, rgba(200, 255, 0, 0.04) 0%, transparent 70%);
+	pointer-events: none;
 }
 
-.RoomWrapper-content {
+/* Live dot pulse */
+.room-live-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #c8ff00;
+	box-shadow: 0 0 8px rgba(200, 255, 0, 0.5);
+	animation: room-pulse 2s ease-in-out infinite;
+	flex-shrink: 0;
+}
+
+@keyframes room-pulse {
+	0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(200, 255, 0, 0.5); }
+	50% { opacity: 0.5; box-shadow: 0 0 4px rgba(200, 255, 0, 0.2); }
+}
+
+/* Copy button */
+.room-copy-btn {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	background: rgba(255, 255, 255, 0.03);
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.room-copy-btn:hover {
+	background: rgba(200, 255, 0, 0.05);
+	border-color: rgba(200, 255, 0, 0.2);
+	box-shadow: 0 0 16px rgba(200, 255, 0, 0.06);
+}
+
+/* Canvas area */
+.room-canvas {
 	position: relative;
 	flex: 1;
+}
+
+/* ── tldraw dark theme overrides to match COLLABDRAW palette ── */
+.tl-theme__dark {
+	--tl-color-background: #0d0d0d;
+	--tl-color-grid: hsl(68, 100%, 50%, 12%);
+
+	/* Panels & surfaces — dark with slight warm shift */
+	--tl-color-low: #111111;
+	--tl-color-low-border: #1a1a1a;
+	--tl-color-panel: #131313;
+	--tl-color-panel-contrast: #222222;
+	--tl-color-panel-overlay: hsla(0, 0%, 8%, 85%);
+	--tl-color-divider: #1f1f1f;
+	--tl-color-culled: #1a1a1a;
+
+	/* Muted fills */
+	--tl-color-muted-0: hsl(68, 30%, 50%, 2%);
+	--tl-color-muted-1: hsl(68, 30%, 50%, 8%);
+	--tl-color-muted-2: hsl(68, 30%, 50%, 4%);
+	--tl-color-hint: hsl(68, 30%, 50%, 6%);
+
+	/* Selection — lime accent instead of blue */
+	--tl-color-selected: #c8ff00;
+	--tl-color-selected-contrast: #0a0a0a;
+	--tl-color-selection-fill: hsl(68, 100%, 50%, 12%);
+	--tl-color-selection-stroke: #c8ff00;
+	--tl-color-focus: hsl(68, 80%, 65%);
+	--tl-color-primary: #c8ff00;
+	--tl-color-brush-fill: hsl(68, 100%, 50%, 5%);
+	--tl-color-brush-stroke: hsl(68, 100%, 50%, 20%);
+
+	/* Shadows — deeper for true-black feel */
+	--tl-shadow-1:
+		0px 1px 2px hsl(0, 0%, 0%, 30%), 0px 1px 3px hsl(0, 0%, 0%, 35%),
+		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
+	--tl-shadow-2:
+		0px 1px 3px hsl(0, 0%, 0%, 70%), 0px 2px 6px hsl(0, 0%, 0%, 40%),
+		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
+	--tl-shadow-3:
+		0px 1px 3px hsl(0, 0%, 0%, 60%), 0px 2px 12px hsl(0, 0%, 0%, 55%),
+		inset 0px 0px 0px 1px var(--tl-color-panel-contrast);
 }
