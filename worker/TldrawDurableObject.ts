@@ -13,8 +13,8 @@ import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
 import { serializeCanvasState } from "../src/canvas/serializer";
 import type { CanvasSnapshot } from "../src/canvas/types";
-import { invokeAgent } from "../src/agent/claude";
-import { submitGeneration, pollUntilDone } from "../src/higgsfield/client";
+import { invokeAgent, generateBrainstormPrompt, classifyVoiceCommand } from "../src/agent/claude";
+import { submitGeneration, pollUntilDone, submitImageGeneration, submitVideoGeneration, pollUntilDoneWithType } from "../src/higgsfield/client";
 
 // add custom shapes and bindings here if needed:
 const schema = createTLSchema({
@@ -41,6 +41,8 @@ export class TldrawDurableObject extends DurableObject<Env> {
 	private readonly router = AutoRouter({ catch: (e) => error(e) })
 		.get("/api/connect/:roomId", (request) => this.handleConnect(request))
 		.post("/api/agent/run", (request) => this.handleAgentRun(request))
+		.post("/api/agent/brainstorm", (request) => this.handleAgentBrainstorm(request))
+		.post("/api/agent/voice-command", (request) => this.handleVoiceCommand(request))
 		.get("/api/voice/:roomId", (request) => this.handleVoiceConnect(request));
 
 	fetch(request: Request): Response | Promise<Response> {
@@ -145,6 +147,120 @@ export class TldrawDurableObject extends DurableObject<Env> {
 			this.broadcast({ type: "agent:done", imageUrl, synthesis, prompt });
 		} catch (e) {
 			console.error("[pipeline] error:", e);
+			this.broadcast({ type: "agent:error", message: String(e) });
+		}
+	}
+
+	// Runs the brainstorm pipeline: screenshot → Claude Vision → Higgsfield → broadcast result.
+	private async runBrainstormPipeline(image: string, mimeType: string) {
+		console.log("[brainstorm-pipeline] start");
+		try {
+			this.broadcast({ type: "agent:status", status: "Analyzing screenshot..." });
+			const replyRaw = await generateBrainstormPrompt(
+				this.env.OPENROUTER_API_KEY,
+				this.env.OPENROUTER_MODEL,
+				image,
+				mimeType,
+			);
+			console.log("[brainstorm-pipeline] claude reply:", replyRaw);
+
+			const jsonMatch = replyRaw.match(/\{[\s\S]*\}/);
+			if (!jsonMatch)
+				throw new Error(`Claude did not return JSON: ${replyRaw}`);
+			const { synthesis, prompt } = JSON.parse(jsonMatch[0]);
+
+			this.broadcast({ type: "agent:status", status: "Rendering image..." });
+			const requestId = await submitGeneration(
+				this.env.HIGGSFIELD_API_KEY,
+				this.env.HIGGSFIELD_API_SECRET,
+				this.env.HIGGSFIELD_MODEL,
+				prompt,
+			);
+			console.log("[brainstorm-pipeline] higgsfield requestId:", requestId);
+			const imageUrl = await pollUntilDone(
+				this.env.HIGGSFIELD_API_KEY,
+				this.env.HIGGSFIELD_API_SECRET,
+				requestId,
+			);
+			console.log("[brainstorm-pipeline] done, imageUrl:", imageUrl);
+
+			this.broadcast({ type: "agent:done", imageUrl, synthesis, prompt });
+		} catch (e) {
+			console.error("[brainstorm-pipeline] error:", e);
+			this.broadcast({ type: "agent:error", message: String(e) });
+		}
+	}
+
+	async handleVoiceCommand(request: IRequest) {
+		console.log("[handleVoiceCommand] received");
+		const body = (await request.json()) as { command: string };
+
+		this.ctx.waitUntil(this.runVoiceCommandPipeline(body.command));
+
+		return Response.json({ ok: true });
+	}
+
+	// Runs the voice command pipeline: classify → generate image or video → broadcast result.
+	private async runVoiceCommandPipeline(command: string) {
+		console.log("[voice-pipeline] start, command:", command);
+		try {
+			this.broadcast({
+				type: "agent:status",
+				status: "Understanding your request...",
+			});
+
+			const classification = await classifyVoiceCommand(
+				this.env.OPENROUTER_API_KEY,
+				this.env.OPENROUTER_MODEL,
+				command,
+			);
+			console.log("[voice-pipeline] classification:", JSON.stringify(classification));
+
+			let requestId: string;
+
+			if (classification.type === "video") {
+				this.broadcast({
+					type: "agent:status",
+					status: "Generating video...",
+				});
+				requestId = await submitVideoGeneration(
+					this.env.HIGGSFIELD_API_KEY,
+					this.env.HIGGSFIELD_API_SECRET,
+					classification.prompt,
+					classification.params,
+				);
+			} else {
+				this.broadcast({
+					type: "agent:status",
+					status: "Generating image...",
+				});
+				requestId = await submitImageGeneration(
+					this.env.HIGGSFIELD_API_KEY,
+					this.env.HIGGSFIELD_API_SECRET,
+					classification.prompt,
+					classification.params,
+				);
+			}
+
+			console.log("[voice-pipeline] higgsfield requestId:", requestId);
+
+			const result = await pollUntilDoneWithType(
+				this.env.HIGGSFIELD_API_KEY,
+				this.env.HIGGSFIELD_API_SECRET,
+				requestId,
+			);
+			console.log("[voice-pipeline] done, url:", result.url, "type:", result.mediaType);
+
+			this.broadcast({
+				type: "agent:done",
+				imageUrl: result.mediaType === "image" ? result.url : undefined,
+				videoUrl: result.mediaType === "video" ? result.url : undefined,
+				mediaType: result.mediaType,
+				synthesis: `Generated ${result.mediaType} from voice command: "${command}"`,
+				prompt: classification.prompt,
+			});
+		} catch (e) {
+			console.error("[voice-pipeline] error:", e);
 			this.broadcast({ type: "agent:error", message: String(e) });
 		}
 	}

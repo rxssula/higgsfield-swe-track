@@ -73,6 +73,30 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return Response.json({ ok: true })
 	})
 
+	// Voice command — receives transcribed text, classifies it, and generates image or video.
+	.post('/api/rooms/:roomId/agent/voice-command', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.json().catch(() => null)
+		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
+
+		const { command } = body as { command?: string }
+		if (!command || typeof command !== 'string') return error(400, 'Missing command string')
+
+		console.log(`[agent:voice-command] room=${roomId} command="${command}"`)
+
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		await stub.fetch(new Request('https://do/api/agent/voice-command', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ command }),
+		}))
+
+		return Response.json({ ok: true })
+	})
+
 	// Frontend POSTs here to switch the agent's behavior mode for a room.
 	.post('/api/rooms/:roomId/agent/set-mode', async (request) => {
 		const { roomId } = request.params
