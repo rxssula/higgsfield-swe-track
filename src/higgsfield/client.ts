@@ -162,3 +162,46 @@ export async function submitVideoGeneration(
 
     return data.request_id;
 }
+
+export async function submitImageToVideoGeneration(
+	apiKey: string,
+	apiSecret: string,
+	model: string,
+	prompt: string,
+	imageBase64: string,
+	mimeType: string,
+	params: Record<string, unknown> = {},
+	options: SubmitOptions = {},
+): Promise<string> {
+	const path = model.startsWith('/') ? model : `/${model}`
+	const body = {
+		prompt,
+		image: imageBase64,
+		mime_type: mimeType,
+		sound: params.sound ?? 'on',
+		duration: params.duration ?? 6,
+		aspect_ratio: params.aspect_ratio ?? '16:9',
+		...params,
+	}
+
+	const response = await fetch(buildSubmitUrl(path, options), {
+		method: 'POST',
+		headers: hfHeaders(apiKey, apiSecret),
+		body: JSON.stringify(body),
+	})
+
+	if (!response.ok) {
+		const text = await response.text()
+		console.warn('[higgsfield] image->video request failed body:', body)
+		throw new Error(`Higgsfield image->video submit error ${response.status}: ${text}`)
+	}
+
+	const data = (await response.json()) as SubmitResponse
+	if (!data.request_id) {
+		console.warn('[higgsfield] image->video response missing request_id:', data)
+		console.warn('[higgsfield] sent body:', body)
+		throw new Error('Higgsfield returned no request_id')
+	}
+
+	return data.request_id
+}

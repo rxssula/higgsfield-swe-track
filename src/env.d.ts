@@ -8,4 +8,5 @@ interface Env {
 	HIGGSFIELD_API_KEY: string
 	HIGGSFIELD_API_SECRET: string
 	HIGGSFIELD_MODEL: string
+	HIGGSFIELD_MODEL_IMAGE_TO_TEXT: string
 }

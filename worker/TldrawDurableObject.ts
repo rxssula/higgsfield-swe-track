@@ -15,24 +15,25 @@ import { serializeCanvasState } from "../src/canvas/serializer";
 import type { CanvasSnapshot } from "../src/canvas/types";
 import { invokeAgent, classifyVoiceCommand } from "../src/agent/claude";
 import {
-    submitGeneration,
-    submitImageGeneration,
-    submitVideoGeneration,
-    getGenerationStatus,
+	submitGeneration,
+	submitImageGeneration,
+	submitVideoGeneration,
+	submitImageToVideoGeneration,
+	getGenerationStatus,
 } from "../src/higgsfield/client";
 
 interface StoredGeneration {
-    generationId: string;
-    status: "working" | "submitted" | "done" | "error";
-    message?: string;
-    synthesis?: string;
-    prompt?: string;
-    requestId?: string;
-    imageUrl?: string;
-    videoUrl?: string;
-    mediaType?: "image" | "video";
-    errorMessage?: string;
-    createdAt: number;
+	generationId: string;
+	status: "working" | "submitted" | "done" | "error";
+	message?: string;
+	synthesis?: string;
+	prompt?: string;
+	requestId?: string;
+	imageUrl?: string;
+	videoUrl?: string;
+	mediaType?: "image" | "video";
+	errorMessage?: string;
+	createdAt: number;
 }
 
 interface HiggsfieldWebhookPayload {
@@ -654,30 +655,51 @@ export class TldrawDurableObject extends DurableObject<Env> {
             const jsonMatch = replyRaw.match(/\{[\s\S]*\}/);
             if (!jsonMatch)
                 throw new Error(`Claude did not return JSON: ${replyRaw}`);
-            const { synthesis, prompt } = JSON.parse(jsonMatch[0]);
+            const parsed = JSON.parse(jsonMatch[0]) as {
+                synthesis: string;
+                prompt: string;
+                mediaType?: "image" | "video";
+            };
+            const targetMedia =
+                parsed.mediaType === "video" ? "video" : "image";
+            const { synthesis, prompt } = parsed;
 
+            const renderStatus =
+                targetMedia === "video"
+                    ? "Rendering video..."
+                    : "Rendering image...";
             await this.storeGeneration({
                 generationId,
                 status: "working",
-                message: "Rendering image...",
+                message: renderStatus,
                 synthesis,
                 prompt,
-                mediaType: "image",
+                mediaType: targetMedia,
                 createdAt,
             });
             this.broadcast({
                 type: "agent:status",
                 generationId,
-                status: "Rendering image...",
+                status: renderStatus,
             });
 
-            const requestId = await submitGeneration(
-                this.env.HIGGSFIELD_API_KEY,
-                this.env.HIGGSFIELD_API_SECRET,
-                this.env.HIGGSFIELD_MODEL,
-                prompt,
-                { webhookUrl },
-            );
+            let requestId: string;
+            if (targetMedia === "video") {
+                requestId = await this.submitVideoRequest(
+                    prompt,
+                    image,
+                    mimeType,
+                    webhookUrl,
+                );
+            } else {
+                requestId = await submitGeneration(
+                    this.env.HIGGSFIELD_API_KEY,
+                    this.env.HIGGSFIELD_API_SECRET,
+                    this.env.HIGGSFIELD_MODEL,
+                    prompt,
+                    { webhookUrl },
+                );
+            }
             console.log("[pipeline] higgsfield requestId:", requestId);
 
             await this.ctx.storage.put(
@@ -687,11 +709,11 @@ export class TldrawDurableObject extends DurableObject<Env> {
             await this.storeGeneration({
                 generationId,
                 status: "submitted",
-                message: "Waiting for image to generate...",
+                message: `Waiting for ${targetMedia} to generate...`,
                 synthesis,
                 prompt,
                 requestId,
-                mediaType: "image",
+                mediaType: targetMedia,
                 createdAt,
             });
 
@@ -709,7 +731,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 this.broadcast({
                     type: "agent:status",
                     generationId,
-                    status: "Waiting for image to generate...",
+                    status: `Waiting for ${targetMedia} to generate...`,
                 });
                 this.ctx.waitUntil(
                     this.pollForCompletion(generationId, requestId),
@@ -728,10 +750,49 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 generationId,
                 message: String(e),
             });
-        }
-    }
+		}
+	}
 
-    // ── Voice command ──
+	private async submitVideoRequest(
+		prompt: string,
+		image?: string,
+		mimeType?: string,
+		webhookUrl?: string,
+	): Promise<string> {
+		if (
+			image &&
+			mimeType &&
+			this.env.HIGGSFIELD_MODEL_IMAGE_TO_TEXT
+		) {
+			try {
+				return await submitImageToVideoGeneration(
+					this.env.HIGGSFIELD_API_KEY,
+					this.env.HIGGSFIELD_API_SECRET,
+					this.env.HIGGSFIELD_MODEL_IMAGE_TO_TEXT,
+					prompt,
+					image,
+					mimeType,
+					{},
+					{ webhookUrl },
+				);
+			} catch (error) {
+				console.warn(
+					"[pipeline] image->video submission failed, falling back",
+					error,
+				);
+			}
+		}
+
+		return submitVideoGeneration(
+			this.env.HIGGSFIELD_API_KEY,
+			this.env.HIGGSFIELD_API_SECRET,
+			prompt,
+			{},
+			{ webhookUrl },
+		);
+	}
+
+	// ── Voice command ──
 
     async handleVoiceCommand(request: IRequest) {
         console.log("[handleVoiceCommand] received");
