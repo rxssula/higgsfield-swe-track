@@ -2,9 +2,21 @@
 @import url('tldraw/tldraw.css');
 @import "tailwindcss";
 
+html, body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	overflow: hidden;
+	overscroll-behavior: none;
+}
+
 body {
 	font-family: 'Inter', sans-serif;
-	overscroll-behavior: none;
+}
+
+#root {
+	height: 100%;
+	overflow: hidden;
 }
 
 /* ── Room shell ── */
@@ -78,6 +90,7 @@ body {
 .room-canvas {
 	position: relative;
 	flex: 1;
+	overflow: hidden;
 }
 
 /* ── tldraw dark theme overrides to match COLLABDRAW palette ── */
