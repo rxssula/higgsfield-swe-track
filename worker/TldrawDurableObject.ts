@@ -66,6 +66,7 @@ const GENERATION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 export class TldrawDurableObject extends DurableObject<Env> {
     private room: TLSocketRoom<TLRecord, void>;
     private voiceSessions = new Map<string, WebSocket>();
+    private voiceUsernames = new Map<string, string>();
 
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
@@ -987,22 +988,39 @@ export class TldrawDurableObject extends DurableObject<Env> {
         const { 0: clientWebSocket, 1: serverWebSocket } = new WebSocketPair();
         serverWebSocket.accept();
 
-        const currentPeers = Array.from(this.voiceSessions.keys());
+        // Send existing peers with their usernames
+        const peerList: { sessionId: string; username: string }[] = [];
+        for (const id of this.voiceSessions.keys()) {
+            peerList.push({ sessionId: id, username: this.voiceUsernames.get(id) ?? "" });
+        }
         serverWebSocket.send(
-            JSON.stringify({ type: "voice-peers", peers: currentPeers }),
+            JSON.stringify({ type: "voice-peers", peers: peerList.map(p => p.sessionId), peerDetails: peerList }),
         );
 
         this.voiceSessions.set(sessionId, serverWebSocket);
-        this.broadcastVoice({ type: "voice-join", sessionId }, sessionId);
 
         serverWebSocket.addEventListener("message", (event) => {
             try {
                 const msg = JSON.parse(event.data as string);
 
+                if (msg.type === "voice-join") {
+                    if (msg.username) {
+                        this.voiceUsernames.set(sessionId, msg.username);
+                    }
+                    this.broadcastVoice(msg, sessionId);
+                    return;
+                }
+
                 if (msg.type === "voice-leave") {
                     this.voiceSessions.delete(sessionId);
+                    this.voiceUsernames.delete(sessionId);
                     this.broadcastVoice({ type: "voice-leave", sessionId });
                     serverWebSocket.close();
+                    return;
+                }
+
+                if (msg.type === "voice-mute-status") {
+                    this.broadcastVoice(msg, sessionId);
                     return;
                 }
 
@@ -1019,11 +1037,13 @@ export class TldrawDurableObject extends DurableObject<Env> {
 
         serverWebSocket.addEventListener("close", () => {
             this.voiceSessions.delete(sessionId);
+            this.voiceUsernames.delete(sessionId);
             this.broadcastVoice({ type: "voice-leave", sessionId });
         });
 
         serverWebSocket.addEventListener("error", () => {
             this.voiceSessions.delete(sessionId);
+            this.voiceUsernames.delete(sessionId);
             this.broadcastVoice({ type: "voice-leave", sessionId });
         });
 

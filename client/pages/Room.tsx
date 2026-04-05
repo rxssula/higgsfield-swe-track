@@ -17,9 +17,10 @@ import {
 	DefaultToolbarContent,
 	createShapeId,
 } from "tldraw";
+import jsPDF from "jspdf";
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
-import { VoiceChatManager, VoiceState } from "../voiceChat";
+import { VoiceChatManager, VoiceState, PeerInfo } from "../voiceChat";
 import {
 	HistoryToggleButton,
 	HistoryPanel,
@@ -85,8 +86,67 @@ interface PageBounds {
 	h: number;
 }
 
+const USERNAME_KEY = "vibers-username";
+
+function UsernameModal({ onSubmit }: { onSubmit: (name: string) => void }) {
+	const [name, setName] = useState("");
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		inputRef.current?.focus();
+	}, []);
+
+	const handleSubmit = (e: React.FormEvent) => {
+		e.preventDefault();
+		const trimmed = name.trim();
+		if (trimmed) onSubmit(trimmed);
+	};
+
+	return (
+		<div className="username-modal-overlay">
+			<form className="username-modal" onSubmit={handleSubmit}>
+				<h2 className="username-modal-title">What's your name?</h2>
+				<p className="username-modal-desc">This will be shown to others in the room</p>
+				<input
+					ref={inputRef}
+					type="text"
+					value={name}
+					onChange={(e) => setName(e.target.value)}
+					placeholder="Enter your name..."
+					className="username-modal-input"
+					maxLength={24}
+				/>
+				<button
+					type="submit"
+					disabled={!name.trim()}
+					className="username-modal-btn"
+				>
+					Join Room
+				</button>
+			</form>
+		</div>
+	);
+}
+
 export function Room() {
 	const { roomId } = useParams<{ roomId: string }>();
+	const [username, setUsername] = useState<string | null>(() => {
+		return localStorage.getItem(USERNAME_KEY);
+	});
+
+	const handleSetUsername = useCallback((name: string) => {
+		localStorage.setItem(USERNAME_KEY, name);
+		setUsername(name);
+	}, []);
+
+	if (!username) {
+		return <UsernameModal onSubmit={handleSetUsername} />;
+	}
+
+	return <RoomInner roomId={roomId} username={username} />;
+}
+
+function RoomInner({ roomId, username }: { roomId?: string; username: string }) {
 	const [generations, setGenerations] = useState<Map<string, Generation>>(
 		() => new Map(),
 	);
@@ -598,6 +658,7 @@ export function Room() {
 							onStart={handleReorganizeStart}
 							onCancel={handleReorganizeCancel}
 						/>
+						<ExportPdfButton editor={editorRef.current} />
 						<DefaultToolbarContent />
 					</DefaultToolbar>
 				);
@@ -616,6 +677,7 @@ export function Room() {
 	return (
 		<RoomWrapper
 			roomId={roomId}
+			username={username}
 			generations={generations}
 			onDismissGeneration={handleDismissGeneration}
 			aiSelectMode={aiSelectMode}
@@ -691,6 +753,7 @@ export function Room() {
 function RoomWrapper({
 	children,
 	roomId,
+	username,
 	generations,
 	onDismissGeneration,
 	aiSelectMode,
@@ -710,6 +773,7 @@ function RoomWrapper({
 }: {
 	children: ReactNode;
 	roomId?: string;
+	username: string;
 	generations: Map<string, Generation>;
 	onDismissGeneration: (id: string) => void;
 	aiSelectMode: boolean;
@@ -812,7 +876,7 @@ function RoomWrapper({
 			<div className="room-controls">
 				{editor && <CompactStylePanel editor={editor} />}
 				<HistoryToggleButton onClick={onHistoryToggle} />
-				{roomId && <VoiceChatPanel roomId={roomId} />}
+				{roomId && <VoiceChatPanel roomId={roomId} username={username} />}
 			</div>
 			{roomId && (
 				<HistoryPanel
@@ -1004,7 +1068,49 @@ function AiSelectOverlay({
 
 // ── Voice Chat UI ──
 
-function VoiceChatPanel({ roomId }: { roomId: string }) {
+const AVATAR_COLORS = [
+	"#e05252", "#e09b52", "#52c4e0", "#5275e0",
+	"#9b52e0", "#e052b0", "#52e08a", "#e0d452",
+];
+
+function hashToColor(id: string): string {
+	let hash = 0;
+	for (let i = 0; i < id.length; i++) {
+		hash = (hash * 31 + id.charCodeAt(i)) | 0;
+	}
+	return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function ChevronIcon() {
+	return (
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+			<polyline points="6 9 12 15 18 9" />
+		</svg>
+	);
+}
+
+function SmallMicOnIcon() {
+	return (
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+			<rect x="9" y="1" width="6" height="11" rx="3" />
+			<path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+			<line x1="12" y1="19" x2="12" y2="23" />
+		</svg>
+	);
+}
+
+function SmallMicOffIcon() {
+	return (
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+			<rect x="9" y="1" width="6" height="11" rx="3" />
+			<path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+			<line x1="12" y1="19" x2="12" y2="23" />
+			<line x1="1" y1="1" x2="23" y2="23" />
+		</svg>
+	);
+}
+
+function VoiceChatPanel({ roomId, username }: { roomId: string; username: string }) {
 	const managerRef = useRef<VoiceChatManager | null>(null);
 	const [vs, setVs] = useState<VoiceState>({
 		joined: false,
@@ -1012,8 +1118,12 @@ function VoiceChatPanel({ roomId }: { roomId: string }) {
 		peerCount: 0,
 		listening: false,
 		lastTranscript: "",
+		peers: new Map(),
+		selfSpeaking: false,
 	});
 	const [commandToast, setCommandToast] = useState<string | null>(null);
+	const [expanded, setExpanded] = useState(false);
+	const wrapperRef = useRef<HTMLDivElement>(null);
 
 	const handleCommand = useCallback(
 		(command: string) => {
@@ -1036,6 +1146,7 @@ function VoiceChatPanel({ roomId }: { roomId: string }) {
 		const mgr = new VoiceChatManager(roomId, {
 			triggerWord: "hello",
 			onCommand: handleCommand,
+			username,
 		});
 		managerRef.current = mgr;
 		const unsub = mgr.subscribe(setVs);
@@ -1044,6 +1155,18 @@ function VoiceChatPanel({ roomId }: { roomId: string }) {
 			mgr.destroy();
 		};
 	}, [roomId, handleCommand]);
+
+	// Click outside to close
+	useEffect(() => {
+		if (!expanded) return;
+		const onClick = (e: MouseEvent) => {
+			if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+				setExpanded(false);
+			}
+		};
+		document.addEventListener("mousedown", onClick);
+		return () => document.removeEventListener("mousedown", onClick);
+	}, [expanded]);
 
 	const handleJoin = async () => {
 		try {
@@ -1066,30 +1189,87 @@ function VoiceChatPanel({ roomId }: { roomId: string }) {
 		);
 	}
 
+	const selfId = managerRef.current?.getSessionId() ?? "";
+	const displayName = managerRef.current?.getUsername() ?? username;
+	const totalCount = vs.peerCount + 1;
+
 	return (
 		<>
-			<div className="voice-panel">
-				<button
-					className={`voice-btn ${vs.muted ? "voice-btn--muted" : "voice-btn--live"}`}
-					onClick={() => managerRef.current?.toggleMute()}
-					aria-label={vs.muted ? "Unmute" : "Mute"}
-				>
-					{vs.muted ? <MicOffIcon /> : <MicOnIcon />}
-				</button>
+			<div className="voice-panel-wrapper" ref={wrapperRef}>
+				<div className="voice-panel">
+					<button
+						className={`voice-btn ${vs.muted ? "voice-btn--muted" : "voice-btn--live"}`}
+						onClick={() => managerRef.current?.toggleMute()}
+						aria-label={vs.muted ? "Unmute" : "Mute"}
+					>
+						{vs.muted ? <MicOffIcon /> : <MicOnIcon />}
+					</button>
 
-				{vs.peerCount > 0 && (
-					<span className="voice-peers">{vs.peerCount + 1}</span>
+					{vs.peerCount > 0 && (
+						<span className="voice-peers">{totalCount}</span>
+					)}
+
+					{vs.listening && <span className="voice-listening-dot" />}
+
+					<button
+						className={`voice-btn voice-expand-btn ${expanded ? "voice-expand-btn--open" : ""}`}
+						onClick={() => setExpanded(!expanded)}
+						aria-label={expanded ? "Collapse participants" : "Show participants"}
+					>
+						<ChevronIcon />
+					</button>
+
+					<button
+						className="voice-btn voice-btn--leave"
+						onClick={() => managerRef.current?.leave()}
+						aria-label="Leave voice chat"
+					>
+						<PhoneOffIcon />
+					</button>
+				</div>
+
+				{expanded && (
+					<div className="voice-participant-list">
+						<div className="voice-participant-header">
+							In Call — {totalCount}
+						</div>
+
+						{/* Self */}
+						<div className="voice-participant">
+							<div
+								className={`voice-participant-avatar ${vs.selfSpeaking ? "voice-participant-avatar--speaking" : ""}`}
+								style={{ background: hashToColor(selfId) }}
+							>
+								{displayName.slice(0, 2).toUpperCase()}
+							</div>
+							<span className="voice-participant-name">
+								{displayName}
+								<span className="voice-participant-you"> (You)</span>
+							</span>
+							<span className="voice-participant-mute">
+								{vs.muted ? <SmallMicOffIcon /> : <SmallMicOnIcon />}
+							</span>
+						</div>
+
+						{/* Peers */}
+						{Array.from(vs.peers.values()).map((peer: PeerInfo) => (
+							<div className="voice-participant" key={peer.sessionId}>
+								<div
+									className={`voice-participant-avatar ${peer.speaking ? "voice-participant-avatar--speaking" : ""}`}
+									style={{ background: hashToColor(peer.sessionId) }}
+								>
+									{peer.username.slice(0, 2).toUpperCase()}
+								</div>
+								<span className="voice-participant-name">
+									{peer.username}
+								</span>
+								<span className={`voice-participant-mute ${peer.muted ? "voice-participant-mute--muted" : ""}`}>
+									{peer.muted ? <SmallMicOffIcon /> : <SmallMicOnIcon />}
+								</span>
+							</div>
+						))}
+					</div>
 				)}
-
-				{vs.listening && <span className="voice-listening-dot" />}
-
-				<button
-					className="voice-btn voice-btn--leave"
-					onClick={() => managerRef.current?.leave()}
-					aria-label="Leave voice chat"
-				>
-					<PhoneOffIcon />
-				</button>
 			</div>
 
 			{commandToast && (
@@ -1263,6 +1443,111 @@ function LayoutIcon() {
 			<rect x="3" y="14" width="7" height="7" rx="1" />
 			<rect x="14" y="14" width="7" height="7" rx="1" />
 		</svg>
+	);
+}
+
+function PdfIcon() {
+	return (
+		<svg
+			width="15"
+			height="15"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+		>
+			<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+			<polyline points="14 2 14 8 20 8" />
+			<line x1="9" y1="15" x2="15" y2="15" />
+		</svg>
+	);
+}
+
+function ExportPdfButton({ editor }: { editor: Editor | null }) {
+	const btnRef = useRef<HTMLButtonElement>(null);
+	const [hover, setHover] = useState(false);
+	const [exporting, setExporting] = useState(false);
+	const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+
+	useEffect(() => {
+		if (!hover || !btnRef.current) {
+			setTipPos(null);
+			return;
+		}
+		const rect = btnRef.current.getBoundingClientRect();
+		setTipPos({ x: rect.left + rect.width / 2, y: rect.top });
+	}, [hover]);
+
+	const handleExport = useCallback(async () => {
+		if (!editor || exporting) return;
+		setExporting(true);
+		try {
+			const ids = [...editor.getCurrentPageShapeIds()];
+			if (ids.length === 0) return;
+
+			const svg = await editor.getSvgString(ids, {
+				background: true,
+				padding: 48,
+				darkMode: editor.user.getIsDarkMode(),
+			});
+			if (!svg) return;
+
+			const image = new Image();
+			image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.svg)}`;
+			await new Promise<void>((resolve, reject) => {
+				image.onload = () => resolve();
+				image.onerror = reject;
+			});
+
+			const scale = 2;
+			const canvas = document.createElement("canvas");
+			canvas.width = svg.width * scale;
+			canvas.height = svg.height * scale;
+			const ctx = canvas.getContext("2d")!;
+			ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+			const imgData = canvas.toDataURL("image/png");
+			const pdf = new jsPDF({
+				orientation: svg.width > svg.height ? "landscape" : "portrait",
+				unit: "px",
+				format: [svg.width, svg.height],
+			});
+			pdf.addImage(imgData, "PNG", 0, 0, svg.width, svg.height);
+			pdf.save("canvas.pdf");
+		} finally {
+			setExporting(false);
+		}
+	}, [editor, exporting]);
+
+	const tooltipText = exporting ? "Exporting…" : "Export as PDF";
+
+	return (
+		<>
+			<button
+				ref={btnRef}
+				className={`ai-generate-btn ${exporting ? "ai-generate-btn--working" : ""}`}
+				onClick={handleExport}
+				disabled={exporting}
+				onMouseEnter={() => setHover(true)}
+				onMouseLeave={() => setHover(false)}
+				aria-label={tooltipText}
+			>
+				<PdfIcon />
+			</button>
+			{hover &&
+				tipPos &&
+				createPortal(
+					<span
+						className="ai-generate-tooltip ai-generate-tooltip--visible"
+						style={{ left: tipPos.x, top: tipPos.y }}
+					>
+						{tooltipText}
+					</span>,
+					document.body,
+				)}
+		</>
 	);
 }
 
