@@ -692,6 +692,27 @@ export class TldrawDurableObject extends DurableObject<Env> {
         }
     }
 
+    private broadcastMediaDone(data: object) {
+        const sessions = this.room.getSessions();
+        let placerAssigned = false;
+        for (const session of sessions) {
+            const isDesignatedPlacer = !placerAssigned;
+            placerAssigned = true;
+            try {
+                this.room.sendCustomMessage(session.sessionId, {
+                    ...data,
+                    replayed: !isDesignatedPlacer,
+                });
+            } catch (e) {
+                console.warn(
+                    "[broadcastMediaDone] failed for session",
+                    session.sessionId,
+                    e,
+                );
+            }
+        }
+    }
+
     // ── Generation storage ──
 
     private genKey(id: string) {
@@ -822,7 +843,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 videoUrl: finalVideoUrl,
             });
 
-            this.broadcast({
+            this.broadcastMediaDone({
                 type: "agent:done",
                 generationId,
                 imageUrl: finalImageUrl,
