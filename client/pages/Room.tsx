@@ -1307,7 +1307,7 @@ function VoiceChatPanel({
 
     useEffect(() => {
         const mgr = new VoiceChatManager(roomId, {
-            triggerWord: "babushka",
+            triggerWord: "Bob",
             onCommand: handleCommand,
             username,
         });
@@ -1828,9 +1828,7 @@ function AgentToggleButton({
 }) {
     const btnRef = useRef<HTMLButtonElement>(null);
     const [hover, setHover] = useState(false);
-    const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(
-        null,
-    );
+    const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
 
     useEffect(() => {
         if (!hover || !btnRef.current) {
