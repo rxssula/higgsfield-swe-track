@@ -13,23 +13,6 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return error(e)
 	},
 })
-	.post('/api/higgsfield/webhook/:roomId', async (request, env) => {
-		const { roomId } = request.params
-		if (!roomId) return error(400, 'Missing roomId')
-
-		const payload = await request.text()
-		if (!payload) return error(400, 'Missing webhook payload')
-
-		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
-		const room = env.TLDRAW_DURABLE_OBJECT.get(id)
-		return room.fetch(
-			new Request('https://do/api/higgsfield/webhook', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: payload,
-			}),
-		)
-	})
 	// requests to /connect are routed to the Durable Object, and handle realtime websocket syncing
 	.get('/api/connect/:roomId', (request, env) => {
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
@@ -77,8 +60,6 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 			return error(400, 'Must provide shapes array or image (base64)')
 		}
 
-		const webhookUrl = new URL(`/api/higgsfield/webhook/${roomId}`, request.url).toString()
-
 		// Forward to the Durable Object — it runs the pipeline and broadcasts
 		// progress + result to all connected clients via WebSocket.
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
@@ -93,7 +74,6 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 				mode,
 				image,
 				mimeType,
-				webhookUrl,
 			}),
 		}))
 
@@ -112,14 +92,13 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		if (!command || typeof command !== 'string') return error(400, 'Missing command string')
 
 		console.log(`[agent:voice-command] room=${roomId} command="${command}"`)
-		const webhookUrl = new URL(`/api/higgsfield/webhook/${roomId}`, request.url).toString()
 
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
 		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
 		await stub.fetch(new Request('https://do/api/agent/voice-command', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ command, webhookUrl }),
+			body: JSON.stringify({ command }),
 		}))
 
 		return Response.json({ ok: true })
@@ -219,14 +198,13 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
 		const parsed = await request.json().catch(() => ({})) as { mode?: string }
 		const mode = parsed.mode === 'autonomous' ? 'autonomous' : 'off'
-		const webhookUrl = new URL(`/api/higgsfield/webhook/${roomId}`, request.url).toString()
 
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
 		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
 		return stub.fetch(new Request('https://do/api/agent/set-mode', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ mode, webhookUrl }),
+			body: JSON.stringify({ mode }),
 		}))
 	})
 

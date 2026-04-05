@@ -31,10 +31,6 @@ export interface GenerationStatusResponse {
     error?: string;
 }
 
-interface SubmitOptions {
-    webhookUrl?: string;
-}
-
 function legacyAuthHeaders(
     apiKey: string,
     apiSecret: string,
@@ -53,23 +49,14 @@ function hfHeaders(apiKey: string, apiSecret: string): Record<string, string> {
     };
 }
 
-function buildSubmitUrl(path: string, options: SubmitOptions = {}): string {
-    const url = new URL(`${HIGGSFIELD_BASE_URL}${path}`);
-    if (options.webhookUrl) {
-        url.searchParams.set("hf_webhook", options.webhookUrl);
-    }
-    return url.toString();
-}
-
 // Submit a generation request to Higgsfield (legacy auth). Returns the request_id.
 export async function submitGeneration(
     apiKey: string,
     apiSecret: string,
     model: string,
     prompt: string,
-    options: SubmitOptions = {},
 ): Promise<string> {
-    const response = await fetch(buildSubmitUrl(`/${model}`, options), {
+    const response = await fetch(`${HIGGSFIELD_BASE_URL}/${model}`, {
         method: "POST",
         headers: legacyAuthHeaders(apiKey, apiSecret),
         body: JSON.stringify({ prompt }),
@@ -114,7 +101,6 @@ export async function submitImageGeneration(
     apiSecret: string,
     prompt: string,
     params: Record<string, unknown> = {},
-    options: SubmitOptions = {},
 ): Promise<string> {
     const body = {
         prompt,
@@ -124,7 +110,7 @@ export async function submitImageGeneration(
         prompt_upsampling: params.prompt_upsampling ?? true,
     };
 
-    const response = await fetch(buildSubmitUrl("/flux-2", options), {
+    const response = await fetch(`${HIGGSFIELD_BASE_URL}/flux-2`, {
         method: "POST",
         headers: hfHeaders(apiKey, apiSecret),
         body: JSON.stringify(body),
@@ -153,7 +139,6 @@ export async function submitVideoGeneration(
     apiSecret: string,
     prompt: string,
     params: Record<string, unknown> = {},
-    options: SubmitOptions = {},
 ): Promise<string> {
     const body = {
         params: {
@@ -169,7 +154,7 @@ export async function submitVideoGeneration(
     };
 
     const response = await fetch(
-        buildSubmitUrl("/generate/kling-video/v3.0/std/text-to-video", options),
+        `${HIGGSFIELD_BASE_URL}/generate/kling-video/v3.0/std/text-to-video`,
         {
             method: "POST",
             headers: hfHeaders(apiKey, apiSecret),
@@ -198,7 +183,6 @@ export async function submitImageToVideoGeneration(
 	imageBase64: string,
 	mimeType: string,
 	params: Record<string, unknown> = {},
-	options: SubmitOptions = {},
 ): Promise<string> {
 	const path = model.startsWith('/') ? model : `/${model}`
 	const body = {
@@ -211,7 +195,7 @@ export async function submitImageToVideoGeneration(
 		...params,
 	}
 
-	const response = await fetch(buildSubmitUrl(path, options), {
+	const response = await fetch(`${HIGGSFIELD_BASE_URL}${path}`, {
 		method: 'POST',
 		headers: hfHeaders(apiKey, apiSecret),
 		body: JSON.stringify(body),
