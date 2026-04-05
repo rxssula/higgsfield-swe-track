@@ -68,6 +68,8 @@ Return strict JSON with the schema for the detected action. Examples:
 
 Only include fields relevant to that action. No extra commentary.`;
 
+export const BRAINSTORM_SYSTEM_PROMPT = `You are analyzing a captured region of the canvas. The user will send structured JSON describing the elements inside the marquee (id, type, text, x/y, w/h) plus optional screenshots when drawings are present. Summarize what you see, call out patterns or conflicts, and suggest 1–2 next steps that would move the brainstorm forward. Focus on spatial relationships (e.g. "top-left cluster", "row of notes near the timeline"). Keep responses short (3-4 sentences).`;
+
 export const REORGANIZE_SYSTEM_PROMPT = `You are a spatial layout engine for a visual brainstorming canvas. You reposition shapes to produce clean, readable, professional arrangements.
 
 ## Input format

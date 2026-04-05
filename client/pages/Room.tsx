@@ -357,7 +357,7 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 	const store = useSync({
 		uri: `${window.location.origin}/api/connect/${roomId}`,
 		assets: multiplayerAssetStore,
-		onCustomMessageReceived: (data: any) => {
+			onCustomMessageReceived: (data: any) => {
 			if (data.type === "agent:status" && data.generationId) {
 				setGenerations((prev) => {
 					const next = new Map(prev);
@@ -404,6 +404,11 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 					next.delete(data.generationId);
 					return next;
 				});
+			} else if (data.type === "agent:actions" && Array.isArray(data.actions)) {
+				const editor = editorRef.current;
+				if (editor) {
+					applyAgentActions(editor, data.actions);
+				}
 			} else if (data.type === "history:snapshot-created") {
 				setSnapshots((prev) => [data.snapshot, ...prev]);
 			} else if (data.type === "history:restored") {
