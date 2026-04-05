@@ -179,6 +179,9 @@ function RoomInner({
     const autoDismissedRef = useRef<Set<string>>(new Set());
     const [historyOpen, setHistoryOpen] = useState(false);
     const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([]);
+    const [agentMode, setAgentMode] = useState<"off" | "autonomous">("off");
+    const [agentThinking, setAgentThinking] = useState(false);
+    const [agentToast, setAgentToast] = useState<string | null>(null);
 
     const fetchSnapshots = useCallback(() => {
         if (!roomId) return;
@@ -187,6 +190,25 @@ function RoomInner({
             .then((data: any) => setSnapshots(data.snapshots ?? []))
             .catch(() => {});
     }, [roomId]);
+
+    useEffect(() => {
+        if (!roomId) return;
+        fetch(`/api/rooms/${roomId}/agent/mode`)
+            .then((r) => r.json())
+            .then((data: any) => setAgentMode(data.mode ?? "off"))
+            .catch(() => {});
+    }, [roomId]);
+
+    const toggleAgentMode = useCallback(() => {
+        if (!roomId) return;
+        const newMode = agentMode === "autonomous" ? "off" : "autonomous";
+        setAgentMode(newMode);
+        fetch(`/api/rooms/${roomId}/agent/set-mode`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: newMode }),
+        }).catch(() => setAgentMode(agentMode));
+    }, [roomId, agentMode]);
 
     useEffect(() => {
         if (historyOpen) fetchSnapshots();
@@ -441,6 +463,18 @@ function RoomInner({
                 setSnapshots((prev) => [data.snapshot, ...prev]);
             } else if (data.type === "history:restored") {
                 fetchSnapshots();
+            } else if (data.type === "agent:thinking") {
+                setAgentThinking(!!data.thinking);
+            } else if (data.type === "agent:contributed") {
+                setAgentThinking(false);
+                const base = `AI added ${data.actionCount} suggestion${data.actionCount !== 1 ? "s" : ""}`;
+                const msg = data.startedMedia
+                    ? `${base} (started image/video)`
+                    : base;
+                setAgentToast(msg);
+                setTimeout(() => setAgentToast(null), 4000);
+            } else if (data.type === "agent:mode-changed") {
+                setAgentMode(data.mode === "autonomous" ? "autonomous" : "off");
             }
         },
     });
@@ -743,6 +777,10 @@ function RoomInner({
             onHistoryClose={() => setHistoryOpen(false)}
             snapshots={snapshots}
             onHistoryRefresh={fetchSnapshots}
+            agentMode={agentMode}
+            agentThinking={agentThinking}
+            agentToast={agentToast}
+            onToggleAgent={toggleAgentMode}
         >
             <Tldraw
                 licenseKey="tldraw-2026-07-13/WyJGSFVscnJvLSIsWyIqIl0sMTYsIjIwMjYtMDctMTMiXQ.ffAi96kEDbYvfzuY4Xc/RMVMdarp1OrXCVWE4vls8eJkZb+PdYIDEWffxFYCYEhoeCKSCn0nM2RsbS/q5DwFzg"
@@ -825,6 +863,10 @@ function RoomWrapper({
     onHistoryClose,
     snapshots,
     onHistoryRefresh,
+    agentMode,
+    agentThinking,
+    agentToast,
+    onToggleAgent,
 }: {
     children: ReactNode;
     roomId?: string;
@@ -845,6 +887,10 @@ function RoomWrapper({
     onHistoryClose: () => void;
     snapshots: SnapshotMeta[];
     onHistoryRefresh: () => void;
+    agentMode: "off" | "autonomous";
+    agentThinking: boolean;
+    agentToast: string | null;
+    onToggleAgent: () => void;
 }) {
     const navigate = useNavigate();
     const [toastVisible, setToastVisible] = useState(false);
@@ -930,6 +976,11 @@ function RoomWrapper({
             {/* Unified controls strip */}
             <div className="room-controls">
                 {editor && <CompactStylePanel editor={editor} />}
+                <AgentToggleButton
+                    mode={agentMode}
+                    thinking={agentThinking}
+                    onToggle={onToggleAgent}
+                />
                 <HistoryToggleButton onClick={onHistoryToggle} />
                 {roomId && (
                     <VoiceChatPanel roomId={roomId} username={username} />
@@ -981,6 +1032,14 @@ function RoomWrapper({
             {reorganizeToast && (
                 <div className="reorganize-toast">
                     Layout reorganized — Cmd+Z to undo
+                </div>
+            )}
+
+            {/* Agent contribution toast */}
+            {agentToast && (
+                <div className="reorganize-toast">
+                    <BrainIcon />
+                    {agentToast}
                 </div>
             )}
 
@@ -1736,6 +1795,85 @@ function PhoneOffIcon() {
             <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" />
             <line x1="22" x2="2" y1="2" y2="22" />
         </svg>
+    );
+}
+
+function BrainIcon() {
+    return (
+        <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            <path d="M12 2a4.5 4.5 0 0 0-3.6 7.2A3.5 3.5 0 0 0 6 12.5 3.5 3.5 0 0 0 7.5 16a3.5 3.5 0 0 0 1.2 5A3.5 3.5 0 0 0 12 22" />
+            <path d="M12 2a4.5 4.5 0 0 1 3.6 7.2A3.5 3.5 0 0 1 18 12.5 3.5 3.5 0 0 1 16.5 16a3.5 3.5 0 0 1-1.2 5A3.5 3.5 0 0 1 12 22" />
+            <path d="M12 2v20" />
+        </svg>
+    );
+}
+
+function AgentToggleButton({
+    mode,
+    thinking,
+    onToggle,
+}: {
+    mode: "off" | "autonomous";
+    thinking: boolean;
+    onToggle: () => void;
+}) {
+    const btnRef = useRef<HTMLButtonElement>(null);
+    const [hover, setHover] = useState(false);
+    const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(
+        null,
+    );
+
+    useEffect(() => {
+        if (!hover || !btnRef.current) {
+            setTipPos(null);
+            return;
+        }
+        const rect = btnRef.current.getBoundingClientRect();
+        setTipPos({ x: rect.left + rect.width / 2, y: rect.top });
+    }, [hover]);
+
+    const isOn = mode === "autonomous";
+    const tooltipText = isOn
+        ? thinking
+            ? "AI is thinking..."
+            : "AI collaborator active"
+        : "Enable AI collaborator";
+
+    return (
+        <>
+            <button
+                ref={btnRef}
+                className={`agent-toggle-btn ${isOn ? "agent-toggle-btn--active" : ""} ${thinking ? "agent-toggle-btn--thinking" : ""}`}
+                onClick={onToggle}
+                onMouseEnter={() => setHover(true)}
+                onMouseLeave={() => setHover(false)}
+                aria-label={tooltipText}
+            >
+                <BrainIcon />
+                {isOn && <span className="agent-toggle-label">AI</span>}
+                {thinking && <span className="agent-thinking-dot" />}
+            </button>
+            {hover &&
+                tipPos &&
+                createPortal(
+                    <span
+                        className="ai-generate-tooltip ai-generate-tooltip--visible"
+                        style={{ left: tipPos.x, top: tipPos.y }}
+                    >
+                        {tooltipText}
+                    </span>,
+                    document.body,
+                )}
+        </>
     );
 }
 

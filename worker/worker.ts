@@ -212,25 +212,31 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		}))
 	})
 
-	// Frontend POSTs here to switch the agent's behavior mode for a room.
-	.post('/api/rooms/:roomId/agent/set-mode', async (request) => {
+	// Agent mode toggle — autonomous or off.
+	.post('/api/rooms/:roomId/agent/set-mode', async (request, env) => {
 		const { roomId } = request.params
 		if (!roomId) return error(400, 'Missing roomId')
 
-		const body = await request.json().catch(() => null)
-		if (!body || typeof body !== 'object') return error(400, 'Invalid JSON body')
+		const parsed = await request.json().catch(() => ({})) as { mode?: string }
+		const mode = parsed.mode === 'autonomous' ? 'autonomous' : 'off'
+		const webhookUrl = new URL(`/api/higgsfield/webhook/${roomId}`, request.url).toString()
 
-		const { mode } = body as { mode?: string }
-		const validModes = ['observer', 'collaborator', 'facilitator']
-		if (!mode || !validModes.includes(mode)) {
-			return error(400, `Invalid mode. Must be one of: ${validModes.join(', ')}`)
-		}
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request('https://do/api/agent/set-mode', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ mode, webhookUrl }),
+		}))
+	})
 
-		// TODO (Milestone 5): update AgentEngine mode for this room, broadcast
-		// agent:mode-changed via TldrawDurableObject.sendCustomMessage()
-		console.log(`[agent:set-mode] room=${roomId} mode=${mode}`)
+	.get('/api/rooms/:roomId/agent/mode', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
 
-		return Response.json({ ok: true, mode })
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request('https://do/api/agent/mode'))
 	})
 
 	.all('*', () => {

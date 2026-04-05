@@ -1702,6 +1702,9 @@ body {
     bottom: 72px;
     left: 50%;
     transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
     background: rgba(30, 30, 30, 0.92);
     color: rgba(255, 255, 255, 0.9);
     font-size: 13px;
@@ -1719,6 +1722,65 @@ body {
 @keyframes reorganize-toast-in {
     from { opacity: 0; transform: translateX(-50%) translateY(6px); }
     to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Agent toggle button ── */
+.agent-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    transition: all 0.2s ease;
+}
+
+.agent-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.agent-toggle-btn--active {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: rgba(139, 92, 246, 0.35);
+    color: #a78bfa;
+}
+
+.agent-toggle-btn--active:hover {
+    background: rgba(139, 92, 246, 0.22);
+}
+
+.agent-toggle-btn--thinking {
+    animation: agent-pulse 1.5s ease-in-out infinite;
+}
+
+.agent-toggle-label {
+    text-transform: uppercase;
+}
+
+.agent-thinking-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #a78bfa;
+    animation: agent-dot-blink 1s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+    50% { box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2); }
+}
+
+@keyframes agent-dot-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 
 /* Hide the default tldraw style panel */

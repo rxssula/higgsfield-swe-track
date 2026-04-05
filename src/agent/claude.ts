@@ -5,6 +5,8 @@ import {
     VOICE_COMMAND_SYSTEM_PROMPT,
     REORGANIZE_SYSTEM_PROMPT,
     BRAINSTORM_SYSTEM_PROMPT,
+    AUTONOMOUS_AGENT_SYSTEM_PROMPT,
+    DESCRIBE_IMAGE_FOR_VIDEO_PROMPT,
 } from "../config";
 
 interface OpenRouterResponse {
@@ -42,6 +44,7 @@ export type VoiceCommandClassification =
           type: "image" | "video";
           prompt: string;
           params: Record<string, unknown>;
+          referenceImageId?: string | null;
       };
 
 // Sends a canvas screenshot to Claude via OpenRouter and returns a single
@@ -214,11 +217,19 @@ export async function reorganizeLayout(
 }
 
 // Classifies a voice command as image or video generation and extracts the prompt + params.
+// Optionally accepts canvas context (describing images on the canvas) so the AI can
+// understand references like "this image" or "these superheroes in the image".
 export async function classifyVoiceCommand(
     apiKey: string,
     model: string,
     command: string,
+    canvasContext?: string,
 ): Promise<VoiceCommandClassification> {
+    let userMessage = command;
+    if (canvasContext) {
+        userMessage = `${command}\n\n--- CANVAS CONTEXT ---\n${canvasContext}`;
+    }
+
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
@@ -230,7 +241,7 @@ export async function classifyVoiceCommand(
             max_tokens: CLAUDE_MAX_TOKENS,
             messages: [
                 { role: "system", content: VOICE_COMMAND_SYSTEM_PROMPT },
-                { role: "user", content: command },
+                { role: "user", content: userMessage },
             ],
         }),
     });
@@ -248,4 +259,115 @@ export async function classifyVoiceCommand(
     if (!jsonMatch) throw new Error(`OpenRouter did not return JSON: ${raw}`);
 
     return JSON.parse(jsonMatch[0]) as VoiceCommandClassification;
+}
+
+/**
+ * Sends a canvas image to OpenRouter (Claude vision) to get a detailed visual
+ * description. This description is then folded into the generation prompt so
+ * the video generator understands the content the user is referring to.
+ */
+export async function describeCanvasImage(
+    apiKey: string,
+    model: string,
+    imageBase64: string,
+    mimeType: string,
+    userIntent?: string,
+): Promise<string> {
+    const textPart = userIntent
+        ? `Describe this image in detail. The user wants to: "${userIntent}". Focus on the visual elements most relevant to their intent.`
+        : "Describe this image in detail.";
+
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            model,
+            max_tokens: 512,
+            messages: [
+                { role: "system", content: DESCRIBE_IMAGE_FOR_VIDEO_PROMPT },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:${mimeType};base64,${imageBase64}`,
+                            },
+                        },
+                        { type: "text", text: textPart },
+                    ],
+                },
+            ],
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`OpenRouter image describe error ${response.status}: ${text}`);
+    }
+
+    const data = (await response.json()) as OpenRouterResponse;
+    const content = data.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new Error("OpenRouter returned empty image description");
+
+    return content;
+}
+
+export interface AutonomousAgentResponse {
+    shouldContribute: boolean;
+    synthesis: string;
+    actions: AgentAction[];
+}
+
+export async function invokeAutonomousAgent(
+    apiKey: string,
+    model: string,
+    serializedCanvas: string,
+    agentHistory: string[],
+): Promise<AutonomousAgentResponse> {
+    let userText = serializedCanvas;
+
+    if (agentHistory.length > 0) {
+        userText += `\n\n## YOUR RECENT ACTIONS (do not repeat these)\n${agentHistory.join("\n")}`;
+    }
+
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            model,
+            max_tokens: CLAUDE_MAX_TOKENS,
+            messages: [
+                { role: "system", content: AUTONOMOUS_AGENT_SYSTEM_PROMPT },
+                { role: "user", content: userText },
+            ],
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`OpenRouter error ${response.status}: ${text}`);
+    }
+
+    const data = (await response.json()) as OpenRouterResponse;
+    const content = data.choices?.[0]?.message?.content?.trim();
+
+    if (!content) throw new Error("OpenRouter returned empty response");
+
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch)
+        throw new Error(`Autonomous agent did not return JSON: ${content}`);
+
+    const parsed = JSON.parse(jsonMatch[0]) as AutonomousAgentResponse;
+    return {
+        shouldContribute: parsed.shouldContribute ?? false,
+        synthesis: parsed.synthesis ?? "",
+        actions: parsed.actions ?? [],
+    };
 }

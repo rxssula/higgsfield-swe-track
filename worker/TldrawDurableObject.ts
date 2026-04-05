@@ -11,13 +11,27 @@ import {
 } from "@tldraw/tlschema";
 import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
-import { serializeCanvasState } from "../src/canvas/serializer";
-import type { CanvasSnapshot, CanvasShape, CanvasBinding } from "../src/canvas/types";
-import { invokeAgent, classifyVoiceCommand, reorganizeLayout, type ReorganizeShape } from "../src/agent/claude";
+import { serializeCanvasState, extractCanvasImages, serializeCanvasImagesContext } from "../src/canvas/serializer";
+import type { CanvasSnapshot, CanvasShape, CanvasBinding, CanvasAsset } from "../src/canvas/types";
+import { invokeAgent, invokeAutonomousAgent, classifyVoiceCommand, describeCanvasImage, reorganizeLayout, type ReorganizeShape } from "../src/agent/claude";
 import type {
 	AgentAction as ClaudeAgentAction,
 	VoiceCommandClassification,
 } from "../src/agent/claude";
+import {
+	createNoteRecord,
+	createArrowRecord,
+	createArrowBindingRecord,
+	createFrameRecord,
+	generateIndices,
+	findHighestIndex,
+} from "../src/canvas/shapeFactory";
+import {
+	AUTONOMOUS_AGENT_COOLDOWN_MS,
+	AUTONOMOUS_AGENT_DEBOUNCE_MS,
+	AUTONOMOUS_AGENT_MIN_SHAPES,
+	AUTONOMOUS_AGENT_MAX_HISTORY,
+} from "../src/config";
 import {
 	submitGeneration,
 	submitImageGeneration,
@@ -68,17 +82,413 @@ const schema = createTLSchema({
 
 const GENERATION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
+function simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+    }
+    return hash.toString(36);
+}
+
 export class TldrawDurableObject extends DurableObject<Env> {
     private room: TLSocketRoom<TLRecord, void>;
+    private storage: SQLiteSyncStorage<TLRecord>;
     private voiceSessions = new Map<string, WebSocket>();
     private voiceUsernames = new Map<string, string>();
+
+    // Autonomous agent state
+    private agentEnabled = false;
+    private agentRunning = false;
+    private lastAgentRunAt = 0;
+    private agentDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    private agentActionHistory: string[] = [];
+    private lastCanvasHash = "";
 
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
         const sql = new DurableObjectSqliteSyncWrapper(ctx.storage);
-        const storage = new SQLiteSyncStorage<TLRecord>({ sql });
-        this.room = new TLSocketRoom<TLRecord, void>({ schema, storage });
+        this.storage = new SQLiteSyncStorage<TLRecord>({ sql });
+        this.room = new TLSocketRoom<TLRecord, void>({ schema, storage: this.storage });
         this.initSnapshotTable();
+        this.restoreAgentMode();
+    }
+
+    // ── Autonomous agent ──
+
+    private async restoreAgentMode() {
+        const mode = await this.ctx.storage.get<string>("agent:mode");
+        if (mode === "autonomous") {
+            this.agentEnabled = true;
+            const history = await this.ctx.storage.get<string[]>("agent:history");
+            if (history) this.agentActionHistory = history;
+            this.startAgentWatcher();
+        }
+    }
+
+    private startAgentWatcher() {
+        this.storage.onChange(({ id }) => {
+            if (id === "agent-action") return;
+            if (!this.agentEnabled) return;
+            this.scheduleAgentRun();
+        });
+    }
+
+    private scheduleAgentRun() {
+        if (this.agentDebounceTimer) clearTimeout(this.agentDebounceTimer);
+        this.agentDebounceTimer = setTimeout(() => {
+            this.agentDebounceTimer = null;
+            this.ctx.waitUntil(this.runAutonomousAgent());
+        }, AUTONOMOUS_AGENT_DEBOUNCE_MS);
+    }
+
+    private async runAutonomousAgent() {
+        if (!this.agentEnabled || this.agentRunning) return;
+
+        const now = Date.now();
+        if (now - this.lastAgentRunAt < AUTONOMOUS_AGENT_COOLDOWN_MS) return;
+
+        this.agentRunning = true;
+        try {
+            const snapshot = this.buildRoomCanvasSnapshot();
+            const userShapes = snapshot.shapes.filter(
+                (s) => !(s.props as Record<string, unknown>)?.aiGenerated &&
+                       s.type !== "arrow",
+            );
+            if (userShapes.length < AUTONOMOUS_AGENT_MIN_SHAPES) return;
+
+            const serialized = serializeCanvasState(snapshot);
+            const hash = simpleHash(serialized);
+            if (hash === this.lastCanvasHash) return;
+
+            this.broadcast({ type: "agent:thinking", thinking: true });
+
+            const result = await invokeAutonomousAgent(
+                this.env.OPENROUTER_API_KEY,
+                this.env.OPENROUTER_MODEL,
+                serialized,
+                this.agentActionHistory,
+            );
+
+            this.lastCanvasHash = hash;
+            this.lastAgentRunAt = Date.now();
+
+            const mediaAction = getMediaAction(result.actions);
+            const canvasActions = (result.actions ?? []).filter(
+                (a) =>
+                    a.type === "sticky" ||
+                    a.type === "comment" ||
+                    a.type === "connect" ||
+                    a.type === "group",
+            );
+            const maxCanvas = mediaAction ? 2 : 3;
+            const canvasToApply = canvasActions.slice(0, maxCanvas);
+            const hasWork =
+                result.shouldContribute &&
+                (canvasToApply.length > 0 || !!mediaAction);
+
+            if (!hasWork) {
+                this.broadcast({ type: "agent:thinking", thinking: false });
+                return;
+            }
+
+            if (canvasToApply.length > 0) {
+                await this.applyAgentActionsToStore(canvasToApply, snapshot);
+                this.broadcastCanvasActions(canvasToApply, result.synthesis);
+            }
+
+            const webhookUrl =
+                await this.ctx.storage.get<string>("agent:webhookUrl");
+            if (mediaAction && webhookUrl) {
+                this.ctx.waitUntil(
+                    this.enqueueAutonomousMediaGeneration(
+                        result.synthesis,
+                        mediaAction,
+                        webhookUrl,
+                    ),
+                );
+            } else if (mediaAction && !webhookUrl) {
+                console.warn(
+                    "[autonomous-agent] media action but no webhookUrl; re-enable AI collaborator to refresh",
+                );
+            }
+
+            const historyEntries: ClaudeAgentAction[] = [...canvasToApply];
+            if (mediaAction) historyEntries.push(mediaAction);
+            for (const action of historyEntries) {
+                const desc =
+                    `${action.type}: ${action.content || action.label || action.prompt || ""}`.slice(
+                        0,
+                        100,
+                    );
+                this.agentActionHistory.push(desc);
+            }
+            while (this.agentActionHistory.length > AUTONOMOUS_AGENT_MAX_HISTORY) {
+                this.agentActionHistory.shift();
+            }
+            await this.ctx.storage.put("agent:history", this.agentActionHistory);
+
+            const actionCount =
+                canvasToApply.length + (mediaAction ? 1 : 0);
+            this.broadcast({
+                type: "agent:contributed",
+                synthesis: result.synthesis,
+                actionCount,
+                startedMedia: !!mediaAction,
+            });
+        } catch (e) {
+            console.error("[autonomous-agent] error:", e);
+        } finally {
+            this.agentRunning = false;
+            this.broadcast({ type: "agent:thinking", thinking: false });
+        }
+    }
+
+    /** Higgsfield image/video job for autonomous agent (same lifecycle as runAgentPipeline media branch). */
+    private async enqueueAutonomousMediaGeneration(
+        synthesis: string,
+        mediaAction: ClaudeAgentAction,
+        webhookUrl: string,
+    ) {
+        const generationId = crypto.randomUUID();
+        const createdAt = Date.now();
+        const prompt = mediaAction.prompt?.trim() || synthesis;
+        const targetMedia =
+            mediaAction.type === "generate_video" ? "video" : "image";
+
+        try {
+            const renderStatus =
+                targetMedia === "video"
+                    ? "Rendering video..."
+                    : "Rendering image...";
+            await this.storeGeneration({
+                generationId,
+                status: "working",
+                message: renderStatus,
+                synthesis,
+                prompt,
+                mediaType: targetMedia,
+                createdAt,
+            });
+            this.broadcast({
+                type: "agent:status",
+                generationId,
+                status: renderStatus,
+            });
+
+            let requestId: string;
+            if (targetMedia === "video") {
+                requestId = await this.submitVideoRequest(
+                    prompt,
+                    undefined,
+                    undefined,
+                    webhookUrl,
+                );
+            } else {
+                requestId = await submitGeneration(
+                    this.env.HIGGSFIELD_API_KEY,
+                    this.env.HIGGSFIELD_API_SECRET,
+                    this.env.HIGGSFIELD_MODEL,
+                    prompt,
+                    { webhookUrl },
+                );
+            }
+
+            await this.ctx.storage.put(
+                this.reqMapKey(requestId),
+                generationId,
+            );
+            await this.storeGeneration({
+                generationId,
+                status: "submitted",
+                message: `Waiting for ${targetMedia} to generate...`,
+                synthesis,
+                prompt,
+                requestId,
+                mediaType: targetMedia,
+                createdAt,
+            });
+
+            const earlyWebhook =
+                await this.ctx.storage.get<HiggsfieldWebhookPayload>(
+                    this.webhookQueueKey(requestId),
+                );
+            if (earlyWebhook) {
+                await this.finalizeGeneration(generationId, earlyWebhook);
+                await this.ctx.storage.delete(
+                    this.webhookQueueKey(requestId),
+                );
+            } else {
+                this.broadcast({
+                    type: "agent:status",
+                    generationId,
+                    status: `Waiting for ${targetMedia} to generate...`,
+                });
+                this.ctx.waitUntil(
+                    this.pollForCompletion(generationId, requestId),
+                );
+            }
+        } catch (e) {
+            console.error("[autonomous-agent] media error:", e);
+            await this.storeGeneration({
+                generationId,
+                status: "error",
+                errorMessage: String(e),
+                createdAt,
+            });
+            this.broadcast({
+                type: "agent:error",
+                generationId,
+                message: String(e),
+            });
+        }
+    }
+
+    private async applyAgentActionsToStore(
+        actions: ClaudeAgentAction[],
+        snapshot: CanvasSnapshot,
+    ) {
+        const existingRecords = this.room.getCurrentSnapshot().documents.map(
+            (d) => d.state as unknown as Record<string, unknown>,
+        );
+        const highestIdx = findHighestIndex(existingRecords as any[]);
+        const neededIndices = actions.reduce((n, a) => {
+            if (
+                a.type === "generate_image" ||
+                a.type === "generate_video"
+            ) {
+                return n;
+            }
+            if (a.type === "connect") return n + 3; // arrow + 2 bindings
+            if (a.type === "group") return n + 1;
+            return n + 1;
+        }, 0);
+        const indices = generateIndices(neededIndices, highestIdx);
+        let indexCursor = 0;
+
+        await this.room.updateStore((store) => {
+            for (const action of actions) {
+                switch (action.type) {
+                    case "sticky":
+                    case "comment": {
+                        const content = action.content?.trim();
+                        if (!content) break;
+                        const color = action.type === "comment"
+                            ? (action.color ?? "light-gray")
+                            : (action.color ?? "yellow");
+                        const record = createNoteRecord({
+                            content,
+                            x: action.x ?? 0,
+                            y: action.y ?? 0,
+                            color,
+                            index: indices[indexCursor++],
+                        });
+                        store.put(record as unknown as TLRecord);
+                        break;
+                    }
+                    case "connect": {
+                        const fromId = action.fromId;
+                        const toId = action.toId;
+                        if (!fromId || !toId) break;
+                        const fromExists = snapshot.shapes.some((s) => s.id === fromId);
+                        const toExists = snapshot.shapes.some((s) => s.id === toId);
+                        if (!fromExists || !toExists) break;
+
+                        const arrowRecord = createArrowRecord({
+                            index: indices[indexCursor++],
+                            label: action.label,
+                        });
+                        const arrowId = arrowRecord.id as string;
+                        store.put(arrowRecord as unknown as TLRecord);
+
+                        const startBinding = createArrowBindingRecord({
+                            arrowId: arrowId as any,
+                            targetId: fromId,
+                            terminal: "start",
+                            index: indices[indexCursor++],
+                        });
+                        store.put(startBinding as unknown as TLRecord);
+
+                        const endBinding = createArrowBindingRecord({
+                            arrowId: arrowId as any,
+                            targetId: toId,
+                            terminal: "end",
+                            index: indices[indexCursor++],
+                        });
+                        store.put(endBinding as unknown as TLRecord);
+                        break;
+                    }
+                    case "group": {
+                        const ids = action.ids?.filter(Boolean) ?? [];
+                        if (ids.length === 0) break;
+                        const groupShapes = snapshot.shapes.filter((s) =>
+                            ids.includes(s.id),
+                        );
+                        if (groupShapes.length === 0) break;
+
+                        const minX = Math.min(...groupShapes.map((s) => s.x));
+                        const minY = Math.min(...groupShapes.map((s) => s.y));
+                        const maxX = Math.max(
+                            ...groupShapes.map((s) =>
+                                s.x + (typeof s.props?.w === "number" ? s.props.w : 200),
+                            ),
+                        );
+                        const maxY = Math.max(
+                            ...groupShapes.map((s) =>
+                                s.y + (typeof s.props?.h === "number" ? s.props.h : 200),
+                            ),
+                        );
+                        const padding = 80;
+                        const frameRecord = createFrameRecord({
+                            x: minX - padding / 2,
+                            y: minY - padding / 2,
+                            w: maxX - minX + padding,
+                            h: maxY - minY + padding,
+                            name: action.label?.trim() || "AI Group",
+                            index: indices[indexCursor++],
+                        });
+                        store.put(frameRecord as unknown as TLRecord);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        });
+    }
+
+    private async handleSetAgentMode(request: IRequest) {
+        const body = (await request.json()) as {
+            mode?: string;
+            webhookUrl?: string;
+        };
+        const mode = body.mode === "autonomous" ? "autonomous" : "off";
+
+        await this.ctx.storage.put("agent:mode", mode);
+
+        if (mode === "autonomous") {
+            if (body.webhookUrl) {
+                await this.ctx.storage.put("agent:webhookUrl", body.webhookUrl);
+            }
+            this.agentEnabled = true;
+            this.startAgentWatcher();
+            this.scheduleAgentRun();
+        } else {
+            this.agentEnabled = false;
+            await this.ctx.storage.delete("agent:webhookUrl");
+            if (this.agentDebounceTimer) {
+                clearTimeout(this.agentDebounceTimer);
+                this.agentDebounceTimer = null;
+            }
+        }
+
+        this.broadcast({ type: "agent:mode-changed", mode });
+        return Response.json({ ok: true, mode });
+    }
+
+    private handleGetAgentMode() {
+        return Response.json({
+            mode: this.agentEnabled ? "autonomous" : "off",
+        });
     }
 
     // ── Snapshot history ──
@@ -211,6 +621,10 @@ export class TldrawDurableObject extends DurableObject<Env> {
         .post("/api/agent/reorganize", (request) =>
             this.handleReorganize(request),
         )
+        .post("/api/agent/set-mode", (request) =>
+            this.handleSetAgentMode(request),
+        )
+        .get("/api/agent/mode", () => this.handleGetAgentMode())
         .get("/api/voice/:roomId", (request) =>
             this.handleVoiceConnect(request),
         )
@@ -796,6 +1210,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
 		const snapshot = this.room.getCurrentSnapshot();
 		const shapes: CanvasShape[] = [];
 		const bindings: CanvasBinding[] = [];
+		const assets: CanvasAsset[] = [];
 
 		for (const doc of snapshot.documents) {
 			const record = doc.state as any;
@@ -808,6 +1223,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
 					rotation: record.rotation ?? 0,
 					parentId: record.parentId ?? record.parent ?? "page:page",
 					props: record.props ?? {},
+					meta: record.meta ?? undefined,
 				});
 			} else if (record.typeName === "binding") {
 				bindings.push({
@@ -823,10 +1239,23 @@ export class TldrawDurableObject extends DurableObject<Env> {
 							normalizedAnchor: { x: 0.5, y: 0.5 },
 						},
 				} as CanvasBinding);
+			} else if (record.typeName === "asset") {
+				assets.push({
+					id: record.id,
+					type: record.type,
+					props: {
+						name: record.props?.name,
+						src: record.props?.src,
+						w: record.props?.w,
+						h: record.props?.h,
+						mimeType: record.props?.mimeType,
+						isAnimated: record.props?.isAnimated,
+					},
+				});
 			}
 		}
 
-		return { shapes, bindings };
+		return { shapes, bindings, assets };
 	}
 
 	// ── Reorganize layout ──
@@ -871,6 +1300,60 @@ export class TldrawDurableObject extends DurableObject<Env> {
         return Response.json({ ok: true });
     }
 
+	/**
+	 * Fetch a canvas image (from R2 bucket or external URL) and return it as base64.
+	 * Handles both local asset paths (/api/uploads/...) and external URLs.
+	 */
+	private async fetchCanvasImageAsBase64(
+		src: string,
+	): Promise<{ imageBase64: string; mimeType: string }> {
+		console.log("[fetchCanvasImage] src:", src);
+
+		let imageData: ArrayBuffer;
+		let mimeType: string;
+
+		// Check if it's a local R2 asset path
+		const uploadMatch = src.match(/\/api\/uploads\/(.+)$/);
+		if (uploadMatch) {
+			const objectName = uploadMatch[1];
+			console.log("[fetchCanvasImage] fetching from R2:", objectName);
+
+			const r2Object = await this.env.TLDRAW_BUCKET.get(objectName);
+			if (!r2Object) {
+				throw new Error(`Image not found in R2: ${objectName}`);
+			}
+
+			imageData = await r2Object.arrayBuffer();
+			mimeType = r2Object.httpMetadata?.contentType ?? "image/png";
+		} else {
+			// External URL — fetch directly
+			console.log("[fetchCanvasImage] fetching external URL:", src);
+			const response = await fetch(src);
+			if (!response.ok) {
+				throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+			}
+			imageData = await response.arrayBuffer();
+			mimeType = response.headers.get("content-type") ?? "image/png";
+		}
+
+		// Convert ArrayBuffer to base64
+		const bytes = new Uint8Array(imageData);
+		let binary = "";
+		for (let i = 0; i < bytes.length; i++) {
+			binary += String.fromCharCode(bytes[i]);
+		}
+		const imageBase64 = btoa(binary);
+
+		console.log(
+			"[fetchCanvasImage] success: size=",
+			imageData.byteLength,
+			"mimeType=",
+			mimeType,
+		);
+
+		return { imageBase64, mimeType };
+	}
+
 	private async runVoiceCommandPipeline(
 		command: string,
 		webhookUrl?: string,
@@ -897,10 +1380,24 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 status: "Understanding your request...",
             });
 
+			// Build canvas context so the AI can understand references to canvas content
+			const snapshot = this.buildRoomCanvasSnapshot();
+			const canvasImages = extractCanvasImages(snapshot.shapes, snapshot.assets);
+			const canvasContext = canvasImages.length > 0
+				? serializeCanvasImagesContext(canvasImages)
+				: undefined;
+
+			console.log(
+				"[voice-pipeline] canvas context: images=",
+				canvasImages.length,
+				canvasContext ? "context built" : "no images on canvas",
+			);
+
 			const classification = await classifyVoiceCommand(
 				this.env.OPENROUTER_API_KEY,
 				this.env.OPENROUTER_MODEL,
 				command,
+				canvasContext,
 			);
 			const normalized = normalizeVoiceClassification(classification);
 			console.log(
@@ -917,7 +1414,6 @@ export class TldrawDurableObject extends DurableObject<Env> {
 			}
 
 			if (normalized.kind === "analyze") {
-				const snapshot = this.buildRoomCanvasSnapshot();
 				await this.runAgentPipeline(
 					snapshot.shapes,
 					snapshot.bindings,
@@ -936,25 +1432,77 @@ export class TldrawDurableObject extends DurableObject<Env> {
 			const synthesis = `Generated ${normalized.mediaType} from voice command: "${command}"`;
 			let requestId: string;
 
+			// Check if the user referenced a canvas image (e.g. "generate trailer of these superheroes in the image")
+			const referenceImageId = normalized.referenceImageId;
+			const hasImageReference = !!referenceImageId;
+
+			// If the user referenced a canvas image, send it to OpenRouter vision
+			// to get a detailed description, then fold that into the prompt.
+			let finalPrompt = prompt;
+			if (hasImageReference) {
+				console.log("[voice-pipeline] canvas image reference detected: referenceImageId=", referenceImageId);
+
+				const refImage = canvasImages.find(img => img.shapeId === referenceImageId);
+				if (!refImage?.src) {
+					throw new Error(`Referenced image ${referenceImageId} not found or has no source URL`);
+				}
+
+				await this.storeGeneration({
+					generationId,
+					status: "working",
+					message: "Analyzing canvas image...",
+					synthesis,
+					prompt,
+					mediaType: normalized.mediaType,
+					createdAt,
+				});
+				this.broadcast({
+					type: "agent:status",
+					generationId,
+					status: "Analyzing canvas image...",
+				});
+
+				// Fetch the image and send to OpenRouter for visual understanding
+				const { imageBase64, mimeType } = await this.fetchCanvasImageAsBase64(refImage.src);
+				const imageDescription = await describeCanvasImage(
+					this.env.OPENROUTER_API_KEY,
+					this.env.OPENROUTER_MODEL,
+					imageBase64,
+					mimeType,
+					command,
+				);
+
+				console.log("[voice-pipeline] image description:", imageDescription);
+
+				// Combine the original prompt with the image description
+				finalPrompt = `${prompt}. The scene is based on the following image: ${imageDescription}`;
+				// Trim to 512 chars for video prompts
+				if (normalized.mediaType === "video" && finalPrompt.length > 512) {
+					finalPrompt = finalPrompt.slice(0, 509) + "...";
+				}
+
+				console.log("[voice-pipeline] enhanced prompt:", finalPrompt);
+			}
+
 			if (normalized.mediaType === "video") {
 				await this.storeGeneration({
 					generationId,
 					status: "working",
-					message: "Generating video...",
+					message: hasImageReference ? "Generating video from canvas image..." : "Generating video...",
 					synthesis,
-					prompt,
+					prompt: finalPrompt,
 					mediaType: "video",
 					createdAt,
 				});
 				this.broadcast({
 					type: "agent:status",
 					generationId,
-					status: "Generating video...",
+					status: hasImageReference ? "Generating video from canvas image..." : "Generating video...",
 				});
 				requestId = await submitVideoGeneration(
 					this.env.HIGGSFIELD_API_KEY,
 					this.env.HIGGSFIELD_API_SECRET,
-					prompt,
+					finalPrompt,
 					normalized.params ?? {},
 					{ webhookUrl },
 				);
@@ -962,21 +1510,21 @@ export class TldrawDurableObject extends DurableObject<Env> {
 				await this.storeGeneration({
 					generationId,
 					status: "working",
-					message: "Generating image...",
+					message: hasImageReference ? "Generating image based on canvas reference..." : "Generating image...",
 					synthesis,
-					prompt,
+					prompt: finalPrompt,
 					mediaType: "image",
 					createdAt,
 				});
 				this.broadcast({
 					type: "agent:status",
 					generationId,
-					status: "Generating image...",
+					status: hasImageReference ? "Generating image based on canvas reference..." : "Generating image...",
 				});
 				requestId = await submitImageGeneration(
 					this.env.HIGGSFIELD_API_KEY,
 					this.env.HIGGSFIELD_API_SECRET,
-					prompt,
+					finalPrompt,
 					normalized.params ?? {},
 					{ webhookUrl },
 				);
@@ -993,7 +1541,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
 				status: "submitted",
 				message: `Waiting for ${normalized.mediaType} to generate...`,
 				synthesis,
-				prompt,
+				prompt: finalPrompt,
 				requestId,
 				mediaType: normalized.mediaType,
 				createdAt,
@@ -1127,7 +1675,7 @@ function getMediaAction(actions?: ClaudeAgentAction[]): ClaudeAgentAction | unde
 
 type NormalizedVoiceResult =
 	| { kind: "canvas"; action: ClaudeAgentAction }
-	| { kind: "media"; mediaType: "image" | "video"; prompt: string; params?: Record<string, unknown> }
+	| { kind: "media"; mediaType: "image" | "video"; prompt: string; params?: Record<string, unknown>; referenceImageId?: string }
 	| { kind: "analyze"; message?: string };
 
 function normalizeVoiceClassification(
@@ -1160,6 +1708,7 @@ function normalizeVoiceClassification(
 				mediaType: classification.type,
 				prompt: classification.prompt,
 				params: classification.params,
+				referenceImageId: classification.referenceImageId ?? undefined,
 			};
 		case "analyze":
 			return { kind: "analyze", message: classification.message };

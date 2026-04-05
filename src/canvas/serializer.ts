@@ -1,4 +1,4 @@
-import type { CanvasShape, CanvasSnapshot } from './types'
+import type { CanvasShape, CanvasAsset, CanvasSnapshot, CanvasImageInfo } from './types'
 import { findClusters, getRegionLabel } from './spatial'
 
 interface SerializedElement {
@@ -143,4 +143,62 @@ function extractRichText(node: any): string {
 		return node.content.map(extractRichText).join('')
 	}
 	return ''
+}
+
+/**
+ * Extract canvas image information for voice command context.
+ * Returns a list of images on the canvas with their metadata,
+ * so the AI can understand what the user is referring to when they say
+ * things like "this image" or "these superheroes in the image".
+ */
+export function extractCanvasImages(
+	shapes: CanvasShape[],
+	assets?: CanvasAsset[],
+): CanvasImageInfo[] {
+	const assetMap = new Map<string, CanvasAsset>()
+	if (assets) {
+		for (const asset of assets) {
+			assetMap.set(asset.id, asset)
+		}
+	}
+
+	return shapes
+		.filter((s) => s.type === 'image')
+		.map((shape) => {
+			const assetId = shape.props?.assetId as string | undefined
+			const asset = assetId ? assetMap.get(assetId) : undefined
+			const meta = shape.meta ?? {}
+			return {
+				shapeId: shape.id,
+				assetId,
+				x: shape.x,
+				y: shape.y,
+				w: typeof shape.props?.w === 'number' ? shape.props.w : undefined,
+				h: typeof shape.props?.h === 'number' ? shape.props.h : undefined,
+				src: asset?.props?.src,
+				aiGenerated: meta.aiGenerated as boolean | undefined,
+				aiPrompt: meta.aiPrompt as string | undefined,
+				name: asset?.props?.name,
+			}
+		})
+}
+
+/**
+ * Serialize canvas images into a context string for voice command classification.
+ * Returns a human-readable description of all images on the canvas.
+ */
+export function serializeCanvasImagesContext(images: CanvasImageInfo[]): string {
+	if (images.length === 0) return ''
+
+	const descriptions = images.map((img, i) => {
+		const parts: string[] = [`Image ${i + 1} (id: ${img.shapeId})`]
+		if (img.aiPrompt) parts.push(`  Description: "${img.aiPrompt}"`)
+		if (img.name && img.name !== 'ai-generated') parts.push(`  Name: "${img.name}"`)
+		if (img.aiGenerated) parts.push('  Source: AI-generated')
+		parts.push(`  Position: (${Math.round(img.x)}, ${Math.round(img.y)})`)
+		if (img.w && img.h) parts.push(`  Size: ${Math.round(img.w)}×${Math.round(img.h)}`)
+		return parts.join('\n')
+	})
+
+	return `\n## CANVAS IMAGES (${images.length} image(s) currently on the canvas)\n\n${descriptions.join('\n\n')}`
 }
