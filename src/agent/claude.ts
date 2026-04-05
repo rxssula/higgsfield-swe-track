@@ -1,4 +1,4 @@
-import { OPENROUTER_BASE_URL, CLAUDE_MAX_TOKENS, BRAINSTORM_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT, VOICE_COMMAND_SYSTEM_PROMPT } from '../config'
+import { OPENROUTER_BASE_URL, CLAUDE_MAX_TOKENS, BRAINSTORM_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT, VOICE_COMMAND_SYSTEM_PROMPT, REORGANIZE_SYSTEM_PROMPT } from '../config'
 
 interface OpenRouterResponse {
 	choices: { message: { content: string } }[]
@@ -129,6 +129,66 @@ export async function invokeAgent(
 	const jsonMatch = content.match(/\{[\s\S]*\}/)
 	if (!jsonMatch) throw new Error(`Claude did not return JSON: ${content}`)
 	return JSON.parse(jsonMatch[0]) as AgentResponse
+}
+
+export interface ReorganizeShape {
+	id: string
+	type: string
+	text: string
+	x: number
+	y: number
+	w: number
+	h: number
+}
+
+export interface ReorganizeMove {
+	id: string
+	x: number
+	y: number
+}
+
+// Sends canvas shapes to Claude and returns new x,y positions for each shape.
+export async function reorganizeLayout(
+	apiKey: string,
+	model: string,
+	shapes: ReorganizeShape[],
+	container: { w: number; h: number },
+): Promise<{ reasoning: string; moves: ReorganizeMove[] }> {
+	const userMessage = JSON.stringify({ container, shapes })
+
+	console.log('[reorganize] prompt to Claude:\n', userMessage)
+
+	const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({
+			model,
+			max_tokens: 2048,
+			messages: [
+				{ role: 'system', content: REORGANIZE_SYSTEM_PROMPT },
+				{ role: 'user', content: userMessage },
+			],
+		}),
+	})
+
+	if (!response.ok) {
+		const text = await response.text()
+		throw new Error(`OpenRouter error ${response.status}: ${text}`)
+	}
+
+	const data = (await response.json()) as OpenRouterResponse
+	const raw = data.choices?.[0]?.message?.content?.trim()
+	if (!raw) throw new Error('OpenRouter returned empty response')
+
+	console.log('[reorganize] Claude response:\n', raw)
+
+	const jsonMatch = raw.match(/\{[\s\S]*\}/)
+	if (!jsonMatch) throw new Error(`Claude did not return JSON: ${raw}`)
+
+	return JSON.parse(jsonMatch[0]) as { reasoning: string; moves: ReorganizeMove[] }
 }
 
 // Classifies a voice command as image or video generation and extracts the prompt + params.

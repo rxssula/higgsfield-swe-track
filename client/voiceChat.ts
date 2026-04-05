@@ -32,9 +32,10 @@ interface ISpeechRecognition extends EventTarget {
 }
 
 type SignalMessage =
-    | { type: "voice-join"; sessionId: string }
+    | { type: "voice-join"; sessionId: string; username?: string }
     | { type: "voice-leave"; sessionId: string }
-    | { type: "voice-peers"; peers: string[] }
+    | { type: "voice-peers"; peers: string[]; peerDetails?: { sessionId: string; username: string }[] }
+    | { type: "voice-mute-status"; sessionId: string; muted: boolean }
     | {
           type: "voice-offer";
           from: string;
@@ -59,22 +60,36 @@ const ICE_SERVERS: RTCIceServer[] = [
     { urls: "stun:stun1.l.google.com:19302" },
 ];
 
+export type PeerInfo = {
+    sessionId: string;
+    shortId: string;
+    username: string;
+    muted: boolean;
+    speaking: boolean;
+};
+
 export type VoiceState = {
     joined: boolean;
     muted: boolean;
     peerCount: number;
     listening: boolean;
     lastTranscript: string;
+    peers: Map<string, PeerInfo>;
+    selfSpeaking: boolean;
 };
 
 type VoiceStateListener = (state: VoiceState) => void;
+
+const SPEAKING_THRESHOLD = 15;
+const SPEAKING_HOLDOVER_MS = 200;
+const VAD_INTERVAL_MS = 50;
 
 export class VoiceChatManager {
     private ws: WebSocket | null = null;
     private sessionId: string;
     private roomId: string;
     private localStream: MediaStream | null = null;
-    private peers = new Map<string, RTCPeerConnection>();
+    private peerConnections = new Map<string, RTCPeerConnection>();
     private audioElements = new Map<string, HTMLAudioElement>();
     private recognition: ISpeechRecognition | null = null;
     private state: VoiceState = {
@@ -83,21 +98,45 @@ export class VoiceChatManager {
         peerCount: 0,
         listening: false,
         lastTranscript: "",
+        peers: new Map(),
+        selfSpeaking: false,
     };
     private listeners = new Set<VoiceStateListener>();
     private triggerWord: string;
     private onCommand: ((command: string) => void) | null = null;
     private speechRetries = 0;
     private static MAX_SPEECH_RETRIES = 3;
+    private username: string;
+
+    // VAD
+    private audioContext: AudioContext | null = null;
+    private localAnalyser: AnalyserNode | null = null;
+    private remoteAnalysers = new Map<string, AnalyserNode>();
+    private vadInterval: ReturnType<typeof setInterval> | null = null;
+    private selfSpeakingUntil = 0;
+    private peerSpeakingUntil = new Map<string, number>();
 
     constructor(
         roomId: string,
-        opts?: { triggerWord?: string; onCommand?: (command: string) => void },
+        opts?: {
+            triggerWord?: string;
+            onCommand?: (command: string) => void;
+            username?: string;
+        },
     ) {
         this.roomId = roomId;
         this.sessionId = "v-" + crypto.randomUUID().slice(0, 8);
         this.triggerWord = (opts?.triggerWord ?? "jose").toLowerCase();
         this.onCommand = opts?.onCommand ?? null;
+        this.username = opts?.username ?? "";
+    }
+
+    getUsername() {
+        return this.username;
+    }
+
+    getSessionId() {
+        return this.sessionId;
     }
 
     getState() {
@@ -117,6 +156,12 @@ export class VoiceChatManager {
         this.listeners.forEach((l) => l(this.state));
     }
 
+    private updatePeers(fn: (peers: Map<string, PeerInfo>) => void) {
+        const next = new Map(this.state.peers);
+        fn(next);
+        this.setState({ peers: next, peerCount: next.size });
+    }
+
     async join() {
         if (this.state.joined) return;
 
@@ -130,6 +175,8 @@ export class VoiceChatManager {
             throw err;
         }
 
+        this.setupLocalVAD();
+
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
         const url = `${proto}//${window.location.host}/api/voice/${this.roomId}?sessionId=${this.sessionId}`;
         this.ws = new WebSocket(url);
@@ -140,8 +187,17 @@ export class VoiceChatManager {
         };
 
         this.ws.onopen = () => {
-            this.send({ type: "voice-join", sessionId: this.sessionId });
+            this.send({
+                type: "voice-join",
+                sessionId: this.sessionId,
+                username: this.username,
+            });
             this.setState({ joined: true });
+            this.send({
+                type: "voice-mute-status",
+                sessionId: this.sessionId,
+                muted: this.state.muted,
+            });
             this.startSpeechRecognition();
         };
 
@@ -161,7 +217,13 @@ export class VoiceChatManager {
         const track = this.localStream.getAudioTracks()[0];
         if (!track) return;
         track.enabled = !track.enabled;
-        this.setState({ muted: !track.enabled });
+        const muted = !track.enabled;
+        this.setState({ muted });
+        this.send({
+            type: "voice-mute-status",
+            sessionId: this.sessionId,
+            muted,
+        });
     }
 
     private send(msg: SignalMessage) {
@@ -170,24 +232,64 @@ export class VoiceChatManager {
         }
     }
 
+    private makePeerInfo(peerId: string, username?: string): PeerInfo {
+        return {
+            sessionId: peerId,
+            shortId: peerId.replace(/^v-/, ""),
+            username: username ?? peerId.replace(/^v-/, ""),
+            muted: false,
+            speaking: false,
+        };
+    }
+
     private async handleSignal(msg: SignalMessage) {
         switch (msg.type) {
             case "voice-peers": {
+                const detailsMap = new Map<string, string>();
+                if (msg.peerDetails) {
+                    for (const d of msg.peerDetails) {
+                        detailsMap.set(d.sessionId, d.username);
+                    }
+                }
                 for (const peerId of msg.peers) {
                     await this.createPeerConnection(peerId, true);
                 }
-                this.setState({ peerCount: this.peers.size });
+                this.updatePeers((peers) => {
+                    for (const peerId of msg.peers) {
+                        if (!peers.has(peerId)) {
+                            peers.set(peerId, this.makePeerInfo(peerId, detailsMap.get(peerId)));
+                        }
+                    }
+                });
                 break;
             }
             case "voice-join": {
                 if (msg.sessionId !== this.sessionId) {
-                    this.setState({ peerCount: this.peers.size + 1 });
+                    this.updatePeers((peers) => {
+                        if (!peers.has(msg.sessionId)) {
+                            peers.set(
+                                msg.sessionId,
+                                this.makePeerInfo(msg.sessionId, msg.username),
+                            );
+                        }
+                    });
                 }
                 break;
             }
             case "voice-leave": {
                 this.removePeer(msg.sessionId);
-                this.setState({ peerCount: this.peers.size });
+                this.updatePeers((peers) => {
+                    peers.delete(msg.sessionId);
+                });
+                break;
+            }
+            case "voice-mute-status": {
+                this.updatePeers((peers) => {
+                    const peer = peers.get(msg.sessionId);
+                    if (peer) {
+                        peer.muted = msg.muted;
+                    }
+                });
                 break;
             }
             case "voice-offer": {
@@ -206,7 +308,7 @@ export class VoiceChatManager {
                 break;
             }
             case "voice-answer": {
-                const pc = this.peers.get(msg.from);
+                const pc = this.peerConnections.get(msg.from);
                 if (pc) {
                     await pc.setRemoteDescription(
                         new RTCSessionDescription(msg.answer),
@@ -215,7 +317,7 @@ export class VoiceChatManager {
                 break;
             }
             case "voice-ice": {
-                const pc = this.peers.get(msg.from);
+                const pc = this.peerConnections.get(msg.from);
                 if (pc && msg.candidate) {
                     await pc.addIceCandidate(
                         new RTCIceCandidate(msg.candidate),
@@ -230,10 +332,11 @@ export class VoiceChatManager {
         peerId: string,
         createOffer: boolean,
     ): Promise<RTCPeerConnection> {
-        if (this.peers.has(peerId)) return this.peers.get(peerId)!;
+        if (this.peerConnections.has(peerId))
+            return this.peerConnections.get(peerId)!;
 
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        this.peers.set(peerId, pc);
+        this.peerConnections.set(peerId, pc);
 
         if (this.localStream) {
             for (const track of this.localStream.getTracks()) {
@@ -250,6 +353,7 @@ export class VoiceChatManager {
                 this.audioElements.set(peerId, audio);
             }
             audio.srcObject = event.streams[0];
+            this.setupRemoteVAD(peerId, event.streams[0]);
         };
 
         pc.onicecandidate = (event) => {
@@ -269,7 +373,9 @@ export class VoiceChatManager {
                 pc.connectionState === "failed"
             ) {
                 this.removePeer(peerId);
-                this.setState({ peerCount: this.peers.size });
+                this.updatePeers((peers) => {
+                    peers.delete(peerId);
+                });
             }
         };
 
@@ -288,16 +394,123 @@ export class VoiceChatManager {
     }
 
     private removePeer(peerId: string) {
-        const pc = this.peers.get(peerId);
+        const pc = this.peerConnections.get(peerId);
         if (pc) {
             pc.close();
-            this.peers.delete(peerId);
+            this.peerConnections.delete(peerId);
         }
         const audio = this.audioElements.get(peerId);
         if (audio) {
             audio.srcObject = null;
             audio.remove();
             this.audioElements.delete(peerId);
+        }
+        this.remoteAnalysers.delete(peerId);
+        this.peerSpeakingUntil.delete(peerId);
+    }
+
+    // ── Voice Activity Detection ──
+
+    private ensureAudioContext(): AudioContext {
+        if (!this.audioContext) {
+            this.audioContext = new AudioContext();
+        }
+        return this.audioContext;
+    }
+
+    private setupLocalVAD() {
+        if (!this.localStream) return;
+        const ctx = this.ensureAudioContext();
+        const source = ctx.createMediaStreamSource(this.localStream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        this.localAnalyser = analyser;
+        this.startVADLoop();
+    }
+
+    private setupRemoteVAD(peerId: string, stream: MediaStream) {
+        const ctx = this.ensureAudioContext();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        this.remoteAnalysers.set(peerId, analyser);
+    }
+
+    private startVADLoop() {
+        if (this.vadInterval) return;
+        const buffer = new Uint8Array(128);
+
+        this.vadInterval = setInterval(() => {
+            const now = Date.now();
+            let changed = false;
+
+            // Check local
+            if (this.localAnalyser) {
+                this.localAnalyser.getByteFrequencyData(buffer);
+                let sum = 0;
+                for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+                const avg = sum / buffer.length;
+                if (avg > SPEAKING_THRESHOLD) {
+                    this.selfSpeakingUntil = now + SPEAKING_HOLDOVER_MS;
+                }
+                const speaking = now < this.selfSpeakingUntil;
+                if (speaking !== this.state.selfSpeaking) {
+                    this.setState({ selfSpeaking: speaking });
+                    changed = true;
+                }
+            }
+
+            // Check remotes
+            for (const [peerId, analyser] of this.remoteAnalysers) {
+                analyser.getByteFrequencyData(buffer);
+                let sum = 0;
+                for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+                const avg = sum / buffer.length;
+                if (avg > SPEAKING_THRESHOLD) {
+                    this.peerSpeakingUntil.set(
+                        peerId,
+                        now + SPEAKING_HOLDOVER_MS,
+                    );
+                }
+                const speaking =
+                    now < (this.peerSpeakingUntil.get(peerId) ?? 0);
+                const peer = this.state.peers.get(peerId);
+                if (peer && peer.speaking !== speaking) {
+                    changed = true;
+                    // Will batch update below
+                }
+            }
+
+            if (changed) {
+                this.updatePeers((peers) => {
+                    const now2 = Date.now();
+                    for (const [peerId] of this.remoteAnalysers) {
+                        const peer = peers.get(peerId);
+                        if (peer) {
+                            peer.speaking =
+                                now2 <
+                                (this.peerSpeakingUntil.get(peerId) ?? 0);
+                        }
+                    }
+                });
+            }
+        }, VAD_INTERVAL_MS);
+    }
+
+    private stopVAD() {
+        if (this.vadInterval) {
+            clearInterval(this.vadInterval);
+            this.vadInterval = null;
+        }
+        this.localAnalyser = null;
+        this.remoteAnalysers.clear();
+        this.peerSpeakingUntil.clear();
+        this.selfSpeakingUntil = 0;
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
         }
     }
 
@@ -386,7 +599,9 @@ export class VoiceChatManager {
                         if (this.state.joined && this.recognition) {
                             try {
                                 this.recognition.start();
-                            } catch { /* already started */ }
+                            } catch {
+                                /* already started */
+                            }
                         }
                     }, 3000);
                 } else {
@@ -427,8 +642,9 @@ export class VoiceChatManager {
 
     private cleanup() {
         this.stopSpeechRecognition();
+        this.stopVAD();
 
-        for (const peerId of Array.from(this.peers.keys())) {
+        for (const peerId of Array.from(this.peerConnections.keys())) {
             this.removePeer(peerId);
         }
 
@@ -449,6 +665,8 @@ export class VoiceChatManager {
             muted: false,
             peerCount: 0,
             listening: false,
+            peers: new Map(),
+            selfSpeaking: false,
         });
     }
 

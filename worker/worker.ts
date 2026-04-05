@@ -195,6 +195,23 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		}))
 	})
 
+	// Reorganize layout — Claude returns new x,y positions for shapes in selection.
+	.post('/api/rooms/:roomId/agent/reorganize', async (request, env) => {
+		const { roomId } = request.params
+		if (!roomId) return error(400, 'Missing roomId')
+
+		const body = await request.text()
+		if (!body) return error(400, 'Missing body')
+
+		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(roomId)
+		const stub = env.TLDRAW_DURABLE_OBJECT.get(id)
+		return stub.fetch(new Request('https://do/api/agent/reorganize', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body,
+		}))
+	})
+
 	// Frontend POSTs here to switch the agent's behavior mode for a room.
 	.post('/api/rooms/:roomId/agent/set-mode', async (request) => {
 		const { roomId } = request.params
