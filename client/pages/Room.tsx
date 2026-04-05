@@ -16,7 +16,6 @@ import {
     DefaultToolbar,
     DefaultToolbarContent,
     createShapeId,
-    PeopleMenu,
 } from "tldraw";
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
