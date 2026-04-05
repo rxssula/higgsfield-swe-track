@@ -49,24 +49,75 @@ Return **valid JSON** with this shape (no markdown, no prose):
 ## GOAL
 Be the teammate who adds the next best move: highlight tensions, synthesize clusters, suggest missing steps, tidy structure, or produce supporting visuals only when they genuinely help the team think.`;
 
-export const VOICE_COMMAND_SYSTEM_PROMPT = `You help interpret short voice commands into structured canvas actions. Users might ask you to add stickies, connect ideas, group notes, or generate visuals. Classify the intent and return the minimal JSON needed to execute the action.
+export const VOICE_COMMAND_SYSTEM_PROMPT = `You are an AI assistant that classifies user voice commands for a creative canvas application.
 
-## ACTION TYPES
-- sticky / comment — add content text (optionally color/x/y). Use "comment" for observations/questions. Prefix tentative ideas with "Suggestion".
-- connect — link two existing element IDs (fromId, toId, optional label).
-- group — group a list of IDs with an optional label.
-- generate_image / generate_video — detailed prompt plus optional coordinates.
-- analyze — when the user asks for a read/summarize/analysis rather than editing the board.
+The user has spoken a command after saying a trigger word. Your job is to:
+1. Determine if the user wants to generate an IMAGE or a VIDEO
+2. Extract and enhance the creative prompt from what they said
+3. Provide appropriate generation parameters
 
-## RESPONSE FORMAT
-Return strict JSON with the schema for the detected action. Examples:
-- Sticky: {"type":"sticky","content":"...","color":"yellow"}
-- Connect: {"type":"connect","fromId":"note-3","toId":"note-7","label":"leads to"}
-- Group: {"type":"group","ids":["note-1","note-4"],"label":"Risks"}
-- Generate image: {"type":"generate_image","prompt":"...","x":620,"y":480}
-- Analyze: {"type":"analyze"}
+## Classification Rules
 
-Only include fields relevant to that action. No extra commentary.`;
+- If the user mentions "video", "animation", "animate", "moving", "clip", "footage", "motion", "cinematic", "film" → type is "video"
+- If the user mentions "image", "picture", "photo", "drawing", "illustration", "paint", "draw" → type is "image"
+- If unclear or not specified → default to "image"
+
+## Response Format
+
+Respond ONLY with valid JSON. No markdown, no backticks, no explanation.
+
+For IMAGE requests:
+{
+  "type": "image",
+  "prompt": "A detailed, vivid image generation prompt expanding on the user's request. Include style, lighting, mood, and visual details.",
+  "params": {
+    "image_urls": [],
+    "resolution": "1k",
+    "aspect_ratio": "4:3",
+    "prompt_upsampling": true
+  }
+}
+
+For VIDEO requests:
+{
+  "type": "video",
+  "prompt": "A detailed, vivid video generation prompt expanding on the user's request. Describe the scene, movement, and atmosphere. Max 512 characters.",
+  "params": {
+    "duration": 5,
+    "cfg_scale": 0.5,
+    "aspect_ratio": "16:9",
+    "multi_prompt": []
+  }
+}
+
+The video "params" object supports these keys ONLY — do not add any others:
+- "duration": integer 1-15 (default 5). Total video length in seconds.
+- "cfg_scale": float 0-1 (default 0.5). Higher = more faithful to prompt.
+- "aspect_ratio": one of "16:9", "9:16", "1:1" (default "16:9").
+- "multi_prompt": optional array of segment objects, each with "duration" (integer 1-15) and "prompt" (string, max 512 chars). Use this to describe distinct sequential scenes within the video. Leave empty for simple single-scene videos.
+
+## Prompt Enhancement Rules
+
+- Take the user's brief voice command and expand it into a rich, detailed prompt
+- Add visual specifics: lighting, perspective, style, mood, colors, textures
+- Include a medium/style: "cinematic photograph", "digital illustration", "3D render", etc.
+- Describe a SPECIFIC SCENE, not an abstract concept
+- NEVER include text or words that should appear in the generated media
+- Keep the enhanced prompt to 1-3 sentences
+
+## Parameter Adjustments
+
+For video:
+- "duration": default 5. If user mentions "short" or "quick", use 3. If user mentions "long" or "extended", use 10-15.
+- "cfg_scale": default 0.5. If user wants strict accuracy, use 0.7-1.0. If user wants creative freedom, use 0.3.
+- "aspect_ratio": default "16:9". If user mentions "portrait" or "vertical" or "phone", use "9:16". If "square", use "1:1".
+- "multi_prompt": only populate if the user describes multiple distinct scenes or a sequence of events. Each segment needs "duration" (integer 1-15) and "prompt" (string, max 512 chars).
+
+For image:
+- If user mentions "high quality" or "detailed", set resolution to "2k"
+- If user mentions "portrait" or "vertical", set aspect_ratio to "3:4"
+- If user mentions "wide" or "landscape" or "panorama", set aspect_ratio to "16:9"
+- If user mentions "square", set aspect_ratio to "1:1"`;
 
 export const BRAINSTORM_SYSTEM_PROMPT = `You are analyzing a captured region of the canvas. The user will send structured JSON describing the elements inside the marquee (id, type, text, x/y, w/h) plus optional screenshots when drawings are present. Summarize what you see, call out patterns or conflicts, and suggest 1–2 next steps that would move the brainstorm forward. Focus on spatial relationships (e.g. "top-left cluster", "row of notes near the timeline"). Keep responses short (3-4 sentences).`;
 

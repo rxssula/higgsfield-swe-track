@@ -42,6 +42,7 @@ interface StoredGeneration {
 
 interface HiggsfieldWebhookPayload {
     status: "completed" | "failed" | "nsfw";
+    id?: string;
     request_id?: string;
     requestId?: string;
     error?: string;
@@ -517,7 +518,7 @@ export class TldrawDurableObject extends DurableObject<Env> {
 
     private async handleHiggsfieldWebhook(request: IRequest) {
         const payload = (await request.json()) as HiggsfieldWebhookPayload;
-        const requestId = payload.request_id ?? payload.requestId;
+        const requestId = payload.request_id ?? payload.requestId ?? payload.id;
         if (!requestId) return error(400, "Missing request_id");
 
         const generationId = await this.ctx.storage.get<string>(

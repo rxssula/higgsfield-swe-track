@@ -5,9 +5,25 @@ interface SubmitResponse {
     status: string;
 }
 
+interface KlingVideoJob {
+    id: string;
+    job_set_type: string;
+    status: string;
+    results: unknown;
+}
+
+interface KlingVideoSubmitResponse {
+    id: string;
+    type: string;
+    created_at: string;
+    jobs: KlingVideoJob[];
+    input_params: Record<string, unknown>;
+}
+
 export interface GenerationStatusResponse {
     status: string;
-    request_id: string;
+    id?: string;
+    request_id?: string;
     images?: { url: string }[];
     image?: { url: string };
     video?: { url: string };
@@ -127,7 +143,11 @@ export async function submitImageGeneration(
     return data.request_id;
 }
 
-// Submit a text-to-video generation via the Hailuo 2.3 endpoint.
+export interface MultiPromptSegment {
+    duration: number;
+    prompt: string;
+}
+
 export async function submitVideoGeneration(
     apiKey: string,
     apiSecret: string,
@@ -136,13 +156,20 @@ export async function submitVideoGeneration(
     options: SubmitOptions = {},
 ): Promise<string> {
     const body = {
-        prompt,
-        duration: params.duration ?? 6,
-        prompt_optimizer: params.prompt_optimizer ?? true,
+        params: {
+            sound: "on",
+            prompt,
+            duration: params.duration ?? 5,
+            elements: [],
+            cfg_scale: params.cfg_scale ?? 0.5,
+            multi_shots: false,
+            aspect_ratio: params.aspect_ratio ?? "16:9",
+            multi_prompt: (params.multi_prompt as MultiPromptSegment[]) ?? [],
+        },
     };
 
     const response = await fetch(
-        buildSubmitUrl("/minimax/hailuo-2.3/standard/text-to-video", options),
+        buildSubmitUrl("/generate/kling-video/v3.0/std/text-to-video", options),
         {
             method: "POST",
             headers: hfHeaders(apiKey, apiSecret),
@@ -157,10 +184,10 @@ export async function submitVideoGeneration(
         );
     }
 
-    const data = (await response.json()) as SubmitResponse;
-    if (!data.request_id) throw new Error("Higgsfield returned no request_id");
+    const data = (await response.json()) as KlingVideoSubmitResponse;
+    if (!data.id) throw new Error("Kling Video returned no id");
 
-    return data.request_id;
+    return data.id;
 }
 
 export async function submitImageToVideoGeneration(
