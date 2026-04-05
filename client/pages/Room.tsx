@@ -27,6 +27,44 @@ import {
 } from "../components/HistoryPanel";
 import { CompactStylePanel } from "../components/CompactStylePanel";
 
+// Recursively walks a ProseMirror JSON node — mirrors src/canvas/serializer.ts
+function extractRichText(node: unknown): string {
+    if (!node || typeof node !== "object") return "";
+    const n = node as Record<string, unknown>;
+    if (typeof n.text === "string") return n.text;
+    if (Array.isArray(n.content))
+        return (n.content as unknown[]).map(extractRichText).join("");
+    return "";
+}
+
+function extractShapeText(shape: { type: string; props: unknown; meta: unknown }): string {
+    const props = shape.props as Record<string, unknown>;
+    const meta = shape.meta as Record<string, unknown>;
+
+    // AI-generated media: use stored prompt from meta
+    if (meta?.aiPrompt && typeof meta.aiPrompt === "string") {
+        return `[AI-generated ${shape.type}: ${meta.aiPrompt}]`;
+    }
+
+    // Rich text (tldraw v4 ProseMirror format)
+    if (props.richText) {
+        const rt = extractRichText(props.richText).trim();
+        if (rt) return rt;
+    }
+
+    // Plain string text
+    if (typeof props.text === "string" && props.text.trim()) {
+        return props.text.trim();
+    }
+
+    // Name fallback (frames, geo shapes)
+    if (typeof props.name === "string" && props.name.trim()) {
+        return props.name.trim();
+    }
+
+    return `[${shape.type}]`;
+}
+
 interface Generation {
     id: string;
     status: "working" | "done" | "error";
@@ -49,6 +87,9 @@ export function Room() {
         () => new Map(),
     );
     const [aiSelectMode, setAiSelectMode] = useState(false);
+    const [reorganizeMode, setReorganizeMode] = useState(false);
+    const [reorganizing, setReorganizing] = useState(false);
+    const [reorganizeToast, setReorganizeToast] = useState(false);
     const editorRef = useRef<Editor | null>(null);
     const selectionBoundsRef = useRef<PageBounds | null>(null);
     const autoDismissedRef = useRef<Set<string>>(new Set());
@@ -98,7 +139,7 @@ export function Room() {
         }
     }, [generations, handleDismissGeneration]);
 
-    const placeImageOnCanvas = useCallback((imageUrl: string) => {
+    const placeImageOnCanvas = useCallback((imageUrl: string, prompt?: string) => {
         const editor = editorRef.current;
         if (!editor) return;
 
@@ -150,6 +191,7 @@ export function Room() {
                 type: "image",
                 x,
                 y,
+                meta: prompt ? { aiPrompt: prompt } : {},
                 props: { assetId, w, h },
             });
         };
@@ -192,13 +234,14 @@ export function Room() {
                 type: "image",
                 x,
                 y,
+                meta: prompt ? { aiPrompt: prompt } : {},
                 props: { assetId, w: fallbackSize, h: fallbackSize },
             });
         };
         img.src = imageUrl;
     }, []);
 
-    const placeVideoOnCanvas = useCallback((videoUrl: string) => {
+    const placeVideoOnCanvas = useCallback((videoUrl: string, prompt?: string) => {
         const editor = editorRef.current;
         if (!editor) return;
 
@@ -227,11 +270,13 @@ export function Room() {
                 },
             },
         ]);
+        const videoShapeId = createShapeId();
         editor.createShape({
-            id: createShapeId(),
+            id: videoShapeId,
             type: "video",
             x: center.x - w / 2,
             y: center.y - h / 2,
+            meta: prompt ? { aiPrompt: prompt } : {},
             props: { assetId, w, h },
         });
     }, []);
@@ -263,9 +308,9 @@ export function Room() {
                     return next;
                 });
                 if (!data.replayed) {
-                    if (data.videoUrl) placeVideoOnCanvas(data.videoUrl);
-                    else if (data.imageUrl)
-                        placeImageOnCanvas(data.imageUrl);
+                    const mediaPrompt = data.prompt || data.synthesis;
+                    if (data.videoUrl) placeVideoOnCanvas(data.videoUrl, mediaPrompt);
+                    else if (data.imageUrl) placeImageOnCanvas(data.imageUrl, mediaPrompt);
                 }
             } else if (data.type === "agent:error" && data.generationId) {
                 setGenerations((prev) => {
@@ -419,6 +464,114 @@ export function Room() {
         setAiSelectMode(false);
     }, []);
 
+    const handleReorganizeStart = useCallback(() => {
+        setReorganizeMode(true);
+    }, []);
+
+    const handleReorganizeCancel = useCallback(() => {
+        setReorganizeMode(false);
+    }, []);
+
+    const handleReorganize = useCallback(
+        async (pageBounds: PageBounds) => {
+            setReorganizeMode(false);
+            const editor = editorRef.current;
+            if (!editor || !roomId) return;
+
+            const allShapes = editor.getCurrentPageShapes();
+            const shapesInBounds = allShapes.filter((shape) => {
+                const b = editor.getShapePageBounds(shape.id);
+                if (!b) return false;
+                return (
+                    pageBounds.x < b.x + b.w &&
+                    pageBounds.x + pageBounds.w > b.x &&
+                    pageBounds.y < b.y + b.h &&
+                    pageBounds.y + pageBounds.h > b.y
+                );
+            });
+
+            if (shapesInBounds.length === 0) return;
+
+            // Build normalized shapes for Claude (coords relative to selection top-left)
+            const shapesForClaude = shapesInBounds.map((shape) => {
+                const b = editor.getShapePageBounds(shape.id)!;
+                const text = extractShapeText(shape);
+                return {
+                    id: shape.id,
+                    type: shape.type,
+                    text,
+                    x: Math.round(b.x - pageBounds.x),
+                    y: Math.round(b.y - pageBounds.y),
+                    w: Math.round(b.w),
+                    h: Math.round(b.h),
+                };
+            });
+
+            setReorganizing(true);
+            try {
+                const res = await fetch(
+                    `/api/rooms/${roomId}/agent/reorganize`,
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            shapes: shapesForClaude,
+                            container: {
+                                w: Math.round(pageBounds.w),
+                                h: Math.round(pageBounds.h),
+                            },
+                        }),
+                    },
+                );
+
+                if (!res.ok) return;
+
+                const { moves } = (await res.json()) as {
+                    reasoning: string;
+                    moves: { id: string; x: number; y: number }[];
+                };
+
+                // Build a lookup from shapeId → shape for parent resolution
+                const shapeMap = new Map(
+                    shapesInBounds.map((s) => [s.id, s]),
+                );
+
+                editor.run(() => {
+                    for (const move of moves) {
+                        const shape = shapeMap.get(move.id as typeof shapesInBounds[number]["id"]);
+                        if (!shape) continue;
+
+                        // Denormalize: move coords are relative to selection top-left
+                        let newX = move.x + pageBounds.x;
+                        let newY = move.y + pageBounds.y;
+
+                        // If shape lives inside a frame, convert to frame-relative coords
+                        if (shape.parentId && !String(shape.parentId).startsWith("page:")) {
+                            const parentBounds = editor.getShapePageBounds(shape.parentId as typeof shape.id);
+                            if (parentBounds) {
+                                newX -= parentBounds.x;
+                                newY -= parentBounds.y;
+                            }
+                        }
+
+                        editor.updateShape({
+                            id: shape.id,
+                            type: shape.type,
+                            x: newX,
+                            y: newY,
+                        });
+                    }
+                });
+
+                setReorganizeToast(true);
+                setTimeout(() => setReorganizeToast(false), 2500);
+            } finally {
+                setReorganizing(false);
+            }
+        },
+        [roomId],
+    );
+
     const components = useMemo(
         () => ({
             MainMenu: null,
@@ -433,12 +586,17 @@ export function Room() {
                             onStart={handleAiSelectStart}
                             onCancel={handleAiSelectCancel}
                         />
+                        <AiReorganizeButton
+                            reorganizeMode={reorganizeMode}
+                            onStart={handleReorganizeStart}
+                            onCancel={handleReorganizeCancel}
+                        />
                         <DefaultToolbarContent />
                     </DefaultToolbar>
                 );
             },
         }),
-        [aiSelectMode, handleAiSelectCancel, handleAiSelectStart],
+        [aiSelectMode, handleAiSelectCancel, handleAiSelectStart, reorganizeMode, handleReorganizeStart, handleReorganizeCancel],
     );
 
     return (
@@ -449,6 +607,11 @@ export function Room() {
             aiSelectMode={aiSelectMode}
             onAiSelectCancel={handleAiSelectCancel}
             onAiSelect={handleAiSelect}
+            reorganizeMode={reorganizeMode}
+            onReorganizeCancel={handleReorganizeCancel}
+            onReorganize={handleReorganize}
+            reorganizing={reorganizing}
+            reorganizeToast={reorganizeToast}
             editor={editorRef.current}
             historyOpen={historyOpen}
             onHistoryToggle={() => setHistoryOpen((v) => !v)}
@@ -487,6 +650,11 @@ function RoomWrapper({
     aiSelectMode,
     onAiSelectCancel,
     onAiSelect,
+    reorganizeMode,
+    onReorganizeCancel,
+    onReorganize,
+    reorganizing,
+    reorganizeToast,
     editor,
     historyOpen,
     onHistoryToggle,
@@ -501,6 +669,11 @@ function RoomWrapper({
     aiSelectMode: boolean;
     onAiSelectCancel: () => void;
     onAiSelect: (bounds: PageBounds) => void;
+    reorganizeMode: boolean;
+    onReorganizeCancel: () => void;
+    onReorganize: (bounds: PageBounds) => void;
+    reorganizing: boolean;
+    reorganizeToast: boolean;
     editor: Editor | null;
     historyOpen: boolean;
     onHistoryToggle: () => void;
@@ -613,7 +786,37 @@ function RoomWrapper({
                     editor={editor}
                     onCancel={onAiSelectCancel}
                     onSelect={onAiSelect}
+                    hintText="Drag to select an area"
                 />
+            )}
+
+            {/* Reorganize selection overlay */}
+            {reorganizeMode && editor && (
+                <AiSelectOverlay
+                    editor={editor}
+                    onCancel={onReorganizeCancel}
+                    onSelect={onReorganize}
+                    hintText="Drag to select area to reorganize"
+                />
+            )}
+
+            {/* Reorganize loading indicator */}
+            {reorganizing && (
+                <div className="agent-status-list">
+                    <div className="agent-status-card">
+                        <div className="agent-status-working">
+                            <span className="agent-status-dot" />
+                            Reorganizing layout...
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Reorganize success toast */}
+            {reorganizeToast && (
+                <div className="reorganize-toast">
+                    Layout reorganized — Cmd+Z to undo
+                </div>
             )}
 
             {/* Agent status cards */}
@@ -679,10 +882,12 @@ function AiSelectOverlay({
     editor,
     onCancel,
     onSelect,
+    hintText = "Drag to select an area",
 }: {
     editor: Editor;
     onCancel: () => void;
     onSelect: (bounds: PageBounds) => void;
+    hintText?: string;
 }) {
     const [dragging, setDragging] = useState(false);
     const [origin, setOrigin] = useState({ x: 0, y: 0 });
@@ -749,7 +954,7 @@ function AiSelectOverlay({
         >
             <div className="ai-select-hint">
                 <WandIcon />
-                <span>Drag to select an area</span>
+                <span>{hintText}</span>
                 <kbd>ESC</kbd>
             </div>
             {rect && (
@@ -910,6 +1115,55 @@ function AiGenerateButton({
     );
 }
 
+function AiReorganizeButton({
+    reorganizeMode,
+    onStart,
+    onCancel,
+}: {
+    reorganizeMode: boolean;
+    onStart: () => void;
+    onCancel: () => void;
+}) {
+    const btnRef = useRef<HTMLButtonElement>(null);
+    const [hover, setHover] = useState(false);
+    const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+
+    useEffect(() => {
+        if (!hover || !btnRef.current) {
+            setTipPos(null);
+            return;
+        }
+        const rect = btnRef.current.getBoundingClientRect();
+        setTipPos({ x: rect.left + rect.width / 2, y: rect.top });
+    }, [hover]);
+
+    const tooltipText = reorganizeMode ? "Cancel" : "Reorganize layout";
+
+    return (
+        <>
+            <button
+                ref={btnRef}
+                className={`ai-generate-btn ${reorganizeMode ? "ai-generate-btn--cancel" : ""}`}
+                onClick={reorganizeMode ? onCancel : onStart}
+                onMouseEnter={() => setHover(true)}
+                onMouseLeave={() => setHover(false)}
+                aria-label={tooltipText}
+            >
+                {reorganizeMode ? <CloseIcon /> : <LayoutIcon />}
+            </button>
+            {hover && tipPos && createPortal(
+                <span
+                    className="ai-generate-tooltip ai-generate-tooltip--visible"
+                    style={{ left: tipPos.x, top: tipPos.y }}
+                >
+                    {tooltipText}
+                </span>,
+                document.body,
+            )}
+        </>
+    );
+}
+
 function WandIcon() {
     return (
         <svg
@@ -948,6 +1202,26 @@ function CloseIcon() {
         >
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+    );
+}
+
+function LayoutIcon() {
+    return (
+        <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
         </svg>
     );
 }

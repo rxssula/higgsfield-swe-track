@@ -1451,6 +1451,31 @@ body {
     background: rgba(200, 255, 0, 0.15);
 }
 
+/* ── Reorganize toast ── */
+.reorganize-toast {
+    position: absolute;
+    bottom: 72px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(30, 30, 30, 0.92);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(8px);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 500;
+    animation: reorganize-toast-in 0.2s ease forwards;
+}
+
+@keyframes reorganize-toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* Hide the default tldraw style panel */
 .tlui-style-panel__wrapper {
     display: none !important;
