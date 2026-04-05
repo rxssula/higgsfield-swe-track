@@ -498,6 +498,25 @@ body {
     }
 }
 
+/* ── AI-generated shape glow on canvas ── */
+.ai-shape-glow {
+    animation: ai-shape-glow-breathe 3.5s ease-in-out infinite;
+}
+
+@keyframes ai-shape-glow-breathe {
+    0%,
+    100% {
+        filter: drop-shadow(0 0 4px rgba(200, 255, 0, 0.2))
+            drop-shadow(0 0 12px rgba(200, 255, 0, 0.1))
+            drop-shadow(0 0 28px rgba(200, 255, 0, 0.05));
+    }
+    50% {
+        filter: drop-shadow(0 0 8px rgba(200, 255, 0, 0.45))
+            drop-shadow(0 0 20px rgba(200, 255, 0, 0.22))
+            drop-shadow(0 0 44px rgba(200, 255, 0, 0.1));
+    }
+}
+
 /* ── AI select overlay ── */
 .ai-select-overlay {
     position: fixed;

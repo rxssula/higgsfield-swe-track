@@ -149,6 +149,7 @@ export function Room() {
                 x,
                 y,
                 props: { assetId, w, h },
+                meta: { aiGenerated: true },
             });
         };
         img.onerror = () => {
@@ -191,6 +192,7 @@ export function Room() {
                 x,
                 y,
                 props: { assetId, w: fallbackSize, h: fallbackSize },
+                meta: { aiGenerated: true },
             });
         };
         img.src = imageUrl;
@@ -231,6 +233,7 @@ export function Room() {
             x: center.x - w / 2,
             y: center.y - h / 2,
             props: { assetId, w, h },
+            meta: { aiGenerated: true },
         });
     }, []);
 
@@ -472,6 +475,44 @@ export function Room() {
                         "url",
                         getBookmarkPreview,
                     );
+
+                    const applyAiGlow = () => {
+                        const container = editor.getContainer();
+                        if (!container) return;
+
+                        container
+                            .querySelectorAll(".ai-shape-glow")
+                            .forEach((el) =>
+                                el.classList.remove("ai-shape-glow"),
+                            );
+
+                        const shapes = editor.getCurrentPageShapes();
+                        for (const shape of shapes) {
+                            if (
+                                shape.meta &&
+                                (shape.meta as Record<string, unknown>)
+                                    .aiGenerated
+                            ) {
+                                const el = container.querySelector(
+                                    `[data-shape-id="${shape.id}"]`,
+                                );
+                                if (el) {
+                                    el.classList.add("ai-shape-glow");
+                                }
+                            }
+                        }
+                    };
+
+                    let glowRaf: number | undefined;
+                    const scheduleGlow = () => {
+                        if (glowRaf) cancelAnimationFrame(glowRaf);
+                        glowRaf = requestAnimationFrame(applyAiGlow);
+                    };
+
+                    editor.store.listen(scheduleGlow, {
+                        scope: "document",
+                    });
+                    setTimeout(applyAiGlow, 300);
                 }}
             ></Tldraw>
         </RoomWrapper>
