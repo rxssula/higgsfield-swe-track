@@ -10,14 +10,14 @@ import {
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-    Tldraw,
-    Editor,
-    AssetRecordType,
-    DefaultToolbar,
-    DefaultToolbarContent,
-    createShapeId,
-    PeopleMenu,
+	Tldraw,
+	Editor,
+	AssetRecordType,
+	DefaultToolbar,
+	DefaultToolbarContent,
+	createShapeId,
 } from "tldraw";
+import { toRichText } from "@tldraw/editor";
 import { getBookmarkPreview } from "../getBookmarkPreview";
 import { multiplayerAssetStore } from "../multiplayerAssetStore";
 import { VoiceChatManager, VoiceState } from "../voiceChat";
@@ -36,6 +36,11 @@ interface Generation {
     videoUrl?: string;
     synthesis?: string;
 }
+
+type AgentCanvasAction =
+	| { type: "sticky" | "comment"; content?: string; color?: string; x?: number; y?: number }
+	| { type: "connect"; fromId?: string; toId?: string; label?: string }
+	| { type: "group"; ids?: string[]; label?: string };
 
 interface PageBounds {
     x: number;
@@ -264,24 +269,28 @@ export function Room() {
                     if (data.videoUrl) placeVideoOnCanvas(data.videoUrl);
                     else if (data.imageUrl) placeImageOnCanvas(data.imageUrl);
                 }
-            } else if (data.type === "agent:error" && data.generationId) {
-                setGenerations((prev) => {
-                    const next = new Map(prev);
-                    next.set(data.generationId, {
-                        id: data.generationId,
-                        status: "error",
-                        message: data.message,
-                    });
-                    return next;
-                });
-            } else if (data.type === "agent:dismiss" && data.generationId) {
-                setGenerations((prev) => {
-                    const next = new Map(prev);
-                    next.delete(data.generationId);
-                    return next;
-                });
-            } else if (data.type === "history:snapshot-created") {
-                setSnapshots((prev) => [data.snapshot, ...prev]);
+			} else if (data.type === "agent:error" && data.generationId) {
+				setGenerations((prev) => {
+					const next = new Map(prev);
+					next.set(data.generationId, {
+						id: data.generationId,
+						status: "error",
+						message: data.message,
+					});
+					return next;
+				});
+			} else if (data.type === "agent:dismiss" && data.generationId) {
+				setGenerations((prev) => {
+					const next = new Map(prev);
+					next.delete(data.generationId);
+					return next;
+				});
+			} else if (data.type === "agent:actions") {
+				if (editorRef.current && Array.isArray(data.actions)) {
+					applyAgentActions(editorRef.current, data.actions);
+				}
+			} else if (data.type === "history:snapshot-created") {
+				setSnapshots((prev) => [data.snapshot, ...prev]);
             } else if (data.type === "history:restored") {
                 fetchSnapshots();
             }
@@ -1008,4 +1017,154 @@ function PhoneOffIcon() {
             <line x1="22" x2="2" y1="2" y2="22" />
         </svg>
     );
+}
+
+function applyAgentActions(editor: Editor, actions: AgentCanvasAction[]) {
+	for (const action of actions) {
+		switch (action.type) {
+			case "sticky":
+			case "comment":
+				createAgentNote(editor, action);
+				break;
+			case "connect":
+				createAgentConnection(editor, action);
+				break;
+			case "group":
+				createAgentGroup(editor, action);
+				break;
+			default:
+				console.info("[agent] action not yet supported", action);
+		}
+	}
+}
+
+function createAgentNote(
+	editor: Editor,
+	action: Extract<AgentCanvasAction, { type: "sticky" | "comment" }>,
+) {
+	const content = action.content?.trim();
+	if (!content) return;
+	const point = getAgentDropPoint(editor, action.x, action.y);
+	const color = normalizeAgentNoteColor(
+		action.color ?? (action.type === "comment" ? "light-gray" : "yellow"),
+	);
+	editor.createShape({
+		id: createShapeId(),
+		type: "note",
+		x: point.x,
+		y: point.y,
+		props: {
+			color: color as any,
+			labelColor: "black",
+			size: action.type === "comment" ? "s" : "m",
+			font: "draw",
+			fontSizeAdjustment: 0,
+			align: "middle",
+			verticalAlign: "middle",
+			growY: 0,
+			url: "",
+			richText: toRichText(content),
+			scale: 1,
+		},
+	});
+}
+
+function createAgentConnection(
+	editor: Editor,
+	action: Extract<AgentCanvasAction, { type: "connect" }>,
+) {
+	const fromId = action.fromId;
+	const toId = action.toId;
+	if (!fromId || !toId) return;
+	const fromShape = editor.getShape(fromId as any);
+	const toShape = editor.getShape(toId as any);
+	if (!fromShape || !toShape) return;
+	const arrowId = createShapeId();
+	editor.createShape({ id: arrowId, type: "arrow", x: 0, y: 0 });
+	editor.createBindings([
+		{
+			fromId: arrowId,
+			toId: fromId as any,
+			type: "arrow",
+			props: {
+				terminal: "start",
+				isExact: false,
+				isPrecise: false,
+				normalizedAnchor: { x: 0.5, y: 0.5 },
+			},
+		},
+		{
+			fromId: arrowId,
+			toId: toId as any,
+			type: "arrow",
+			props: {
+				terminal: "end",
+				isExact: false,
+				isPrecise: false,
+				normalizedAnchor: { x: 0.5, y: 0.5 },
+			},
+		},
+	]);
+	const label = action.label?.trim();
+	if (label) {
+		editor.updateShape({
+			id: arrowId,
+			type: "arrow",
+			props: { richText: toRichText(label) },
+		});
+	}
+}
+
+function createAgentGroup(
+	editor: Editor,
+	action: Extract<AgentCanvasAction, { type: "group" }>,
+) {
+	const ids = action.ids?.filter(Boolean) ?? [];
+	if (ids.length === 0) return;
+	const bounds = ids
+		.map((id) => editor.getShapePageBounds(id as any))
+		.filter((b) => !!b) as Array<{ x: number; y: number; w: number; h: number }>;
+	if (bounds.length === 0) return;
+	const minX = Math.min(...bounds.map((b) => b.x));
+	const minY = Math.min(...bounds.map((b) => b.y));
+	const maxX = Math.max(...bounds.map((b) => b.x + b.w));
+	const maxY = Math.max(...bounds.map((b) => b.y + b.h));
+	const padding = 80;
+	const frameId = createShapeId();
+	editor.createShape({
+		id: frameId,
+		type: "frame",
+		x: minX - padding / 2,
+		y: minY - padding / 2,
+		props: {
+			w: Math.max(200, maxX - minX + padding),
+			h: Math.max(200, maxY - minY + padding),
+			name: action.label?.trim() || "AI Group",
+		},
+	});
+	editor.reparentShapes(ids as any[], frameId as any);
+}
+
+function getAgentDropPoint(editor: Editor, x?: number, y?: number) {
+	if (typeof x === "number" && typeof y === "number") {
+		return { x, y };
+	}
+	const viewport = editor.getViewportScreenBounds();
+	return editor.screenToPage({
+		x: viewport.x + viewport.w / 2,
+		y: viewport.y + viewport.h / 2,
+	});
+}
+
+function normalizeAgentNoteColor(color: string) {
+	const allowed = new Set([
+		"yellow",
+		"orange",
+		"green",
+		"blue",
+		"violet",
+		"light-gray",
+		"gray",
+	]);
+	return allowed.has(color) ? color : "yellow";
 }

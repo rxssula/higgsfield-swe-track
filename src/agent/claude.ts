@@ -4,11 +4,28 @@ interface OpenRouterResponse {
 	choices: { message: { content: string } }[]
 }
 
-export interface VoiceCommandClassification {
-	type: 'image' | 'video'
-	prompt: string
-	params: Record<string, unknown>
+export interface AgentAction {
+	type: 'sticky' | 'comment' | 'connect' | 'group' | 'generate_image' | 'generate_video'
+	content?: string
+	color?: string
+	x?: number
+	y?: number
+	fromId?: string
+	toId?: string
+	label?: string
+	ids?: string[]
+	prompt?: string
 }
+
+export interface AgentResponse {
+	synthesis: string
+	actions: AgentAction[]
+}
+
+export type VoiceCommandClassification =
+	| AgentAction
+	| { type: 'analyze'; message?: string }
+	| { type: 'image' | 'video'; prompt: string; params: Record<string, unknown> }
 
 // Sends a canvas screenshot to Claude via OpenRouter and returns a single
 // image generation prompt to pass to Higgsfield.
@@ -67,7 +84,7 @@ export async function invokeAgent(
 	message?: string,
 	image?: string,
 	mimeType?: string,
-): Promise<string> {
+): Promise<AgentResponse> {
 	const textContent = message
 		? `${serializedCanvas}\n\nUser message: ${message}`
 		: serializedCanvas
@@ -109,7 +126,9 @@ export async function invokeAgent(
 
 	if (!content) throw new Error('OpenRouter returned empty response')
 
-	return content
+	const jsonMatch = content.match(/\{[\s\S]*\}/)
+	if (!jsonMatch) throw new Error(`Claude did not return JSON: ${content}`)
+	return JSON.parse(jsonMatch[0]) as AgentResponse
 }
 
 // Classifies a voice command as image or video generation and extracts the prompt + params.

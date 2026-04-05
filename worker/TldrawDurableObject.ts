@@ -12,8 +12,12 @@ import {
 import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
 import { serializeCanvasState } from "../src/canvas/serializer";
-import type { CanvasSnapshot } from "../src/canvas/types";
+import type { CanvasSnapshot, CanvasShape, CanvasBinding } from "../src/canvas/types";
 import { invokeAgent, classifyVoiceCommand } from "../src/agent/claude";
+import type {
+	AgentAction as ClaudeAgentAction,
+	VoiceCommandClassification,
+} from "../src/agent/claude";
 import {
 	submitGeneration,
 	submitImageGeneration,
@@ -591,10 +595,10 @@ export class TldrawDurableObject extends DurableObject<Env> {
         return Response.json({ ok: true });
     }
 
-    private async runAgentPipeline(
-        shapes: unknown[],
-        bindings: unknown[],
-        message?: string,
+	private async runAgentPipeline(
+		shapes: unknown[],
+		bindings: unknown[],
+		message?: string,
         _mode?: string,
         image?: string,
         mimeType?: string,
@@ -609,60 +613,39 @@ export class TldrawDurableObject extends DurableObject<Env> {
             shapes.length,
         );
 
-        try {
-            await this.storeGeneration({
-                generationId,
-                status: "working",
-                message: "Reading canvas...",
-                mediaType: "image",
-                createdAt,
-            });
-            this.broadcast({
-                type: "agent:status",
-                generationId,
-                status: "Reading canvas...",
-            });
+		try {
+			const snapshot: CanvasSnapshot = {
+				shapes: shapes as any,
+				bindings: bindings as any,
+			};
+			const serialized = serializeCanvasState(snapshot);
+			console.log("[pipeline] serialized canvas:\n", serialized);
 
-            const snapshot: CanvasSnapshot = {
-                shapes: shapes as any,
-                bindings: bindings as any,
-            };
-            const serialized = serializeCanvasState(snapshot);
-            console.log("[pipeline] serialized canvas:\n", serialized);
-
-            await this.storeGeneration({
-                generationId,
-                status: "working",
-                message: "Generating prompt...",
-                mediaType: "image",
-                createdAt,
-            });
-            this.broadcast({
-                type: "agent:status",
-                generationId,
-                status: "Generating prompt...",
-            });
-
-            const replyRaw = await invokeAgent(
-                this.env.OPENROUTER_API_KEY,
-                this.env.OPENROUTER_MODEL,
-                serialized,
-                message,
-                image,
-                mimeType,
-            );
-            console.log("[pipeline] claude reply:", replyRaw);
-            const jsonMatch = replyRaw.match(/\{[\s\S]*\}/);
-            if (!jsonMatch)
-                throw new Error(`Claude did not return JSON: ${replyRaw}`);
-            const parsed = JSON.parse(jsonMatch[0]) as {
-                synthesis: string;
-                prompt: string;
-                mediaType?: "image" | "video";
-            };
-            const targetMedia =
-                parsed.mediaType === "video" ? "video" : "image";
-            const { synthesis, prompt } = parsed;
+			const agentResponse = await invokeAgent(
+				this.env.OPENROUTER_API_KEY,
+				this.env.OPENROUTER_MODEL,
+				serialized,
+				message,
+				image,
+				mimeType,
+			);
+			console.log("[pipeline] claude actions:", agentResponse);
+			const mediaAction = getMediaAction(agentResponse.actions);
+			const synthesis = agentResponse.synthesis;
+			const canvasActions = agentResponse.actions?.filter((action) =>
+				action.type === "sticky" ||
+				action.type === "comment" ||
+				action.type === "connect" ||
+				action.type === "group",
+			);
+			this.broadcastCanvasActions(canvasActions, synthesis);
+			if (!mediaAction) {
+				console.log("[pipeline] no media action returned; exiting");
+				return;
+			}
+			const prompt = mediaAction.prompt ?? synthesis;
+			const targetMedia =
+				mediaAction.type === "generate_video" ? "video" : "image";
 
             const renderStatus =
                 targetMedia === "video"
@@ -792,6 +775,55 @@ export class TldrawDurableObject extends DurableObject<Env> {
 		);
 	}
 
+	private broadcastCanvasActions(
+		actions?: ClaudeAgentAction[],
+		synthesis?: string,
+	) {
+		if (!actions || actions.length === 0) return;
+		this.broadcast({
+			type: "agent:actions",
+			actions,
+			synthesis,
+		});
+	}
+
+	private buildRoomCanvasSnapshot(): CanvasSnapshot {
+		const snapshot = this.room.getCurrentSnapshot();
+		const shapes: CanvasShape[] = [];
+		const bindings: CanvasBinding[] = [];
+
+		for (const doc of snapshot.documents) {
+			const record = doc.state as any;
+			if (record.typeName === "shape") {
+				shapes.push({
+					id: record.id,
+					type: record.type,
+					x: record.x ?? 0,
+					y: record.y ?? 0,
+					rotation: record.rotation ?? 0,
+					parentId: record.parentId ?? record.parent ?? "page:page",
+					props: record.props ?? {},
+				});
+			} else if (record.typeName === "binding") {
+				bindings.push({
+					id: record.id,
+					type: record.type,
+					fromId: record.fromId,
+					toId: record.toId,
+					props:
+						record.props ?? {
+							terminal: "start",
+							isExact: false,
+							isPrecise: false,
+							normalizedAnchor: { x: 0.5, y: 0.5 },
+						},
+				} as CanvasBinding);
+			}
+		}
+
+		return { shapes, bindings };
+	}
+
 	// ── Voice command ──
 
     async handleVoiceCommand(request: IRequest) {
@@ -808,10 +840,10 @@ export class TldrawDurableObject extends DurableObject<Env> {
         return Response.json({ ok: true });
     }
 
-    private async runVoiceCommandPipeline(
-        command: string,
-        webhookUrl?: string,
-    ) {
+	private async runVoiceCommandPipeline(
+		command: string,
+		webhookUrl?: string,
+	) {
         const generationId = crypto.randomUUID();
         const createdAt = Date.now();
         console.log(
@@ -834,105 +866,130 @@ export class TldrawDurableObject extends DurableObject<Env> {
                 status: "Understanding your request...",
             });
 
-            const classification = await classifyVoiceCommand(
-                this.env.OPENROUTER_API_KEY,
-                this.env.OPENROUTER_MODEL,
-                command,
-            );
-            console.log(
-                "[voice-pipeline] classification:",
-                JSON.stringify(classification),
-            );
+			const classification = await classifyVoiceCommand(
+				this.env.OPENROUTER_API_KEY,
+				this.env.OPENROUTER_MODEL,
+				command,
+			);
+			const normalized = normalizeVoiceClassification(classification);
+			console.log(
+				"[voice-pipeline] classification:",
+				JSON.stringify(normalized),
+			);
 
-            const mediaType = classification.type as "image" | "video";
-            const synthesis = `Generated ${mediaType} from voice command: "${command}"`;
-            let requestId: string;
+			if (normalized.kind === "canvas") {
+				this.broadcastCanvasActions(
+					[normalized.action],
+					`Voice command: ${command}`,
+				);
+				return;
+			}
 
-            if (classification.type === "video") {
-                await this.storeGeneration({
-                    generationId,
-                    status: "working",
-                    message: "Generating video...",
-                    synthesis,
-                    prompt: classification.prompt,
-                    mediaType: "video",
-                    createdAt,
-                });
-                this.broadcast({
-                    type: "agent:status",
-                    generationId,
-                    status: "Generating video...",
-                });
-                requestId = await submitVideoGeneration(
-                    this.env.HIGGSFIELD_API_KEY,
-                    this.env.HIGGSFIELD_API_SECRET,
-                    classification.prompt,
-                    classification.params,
-                    { webhookUrl },
-                );
-            } else {
-                await this.storeGeneration({
-                    generationId,
-                    status: "working",
-                    message: "Generating image...",
-                    synthesis,
-                    prompt: classification.prompt,
-                    mediaType: "image",
-                    createdAt,
-                });
-                this.broadcast({
-                    type: "agent:status",
-                    generationId,
-                    status: "Generating image...",
-                });
-                requestId = await submitImageGeneration(
-                    this.env.HIGGSFIELD_API_KEY,
-                    this.env.HIGGSFIELD_API_SECRET,
-                    classification.prompt,
-                    classification.params,
-                    { webhookUrl },
-                );
-            }
+			if (normalized.kind === "analyze") {
+				const snapshot = this.buildRoomCanvasSnapshot();
+				await this.runAgentPipeline(
+					snapshot.shapes,
+					snapshot.bindings,
+					normalized.message ?? command,
+					undefined,
+					undefined,
+					webhookUrl,
+				);
+				return;
+			}
 
-            console.log("[voice-pipeline] higgsfield requestId:", requestId);
+			const prompt = normalized.prompt?.trim();
+			if (!prompt) {
+				throw new Error("Voice media request missing prompt");
+			}
+			const synthesis = `Generated ${normalized.mediaType} from voice command: "${command}"`;
+			let requestId: string;
 
-            await this.ctx.storage.put(
-                this.reqMapKey(requestId),
-                generationId,
-            );
-            await this.storeGeneration({
-                generationId,
-                status: "submitted",
-                message: `Waiting for ${mediaType} to generate...`,
-                synthesis,
-                prompt: classification.prompt,
-                requestId,
-                mediaType,
-                createdAt,
-            });
+			if (normalized.mediaType === "video") {
+				await this.storeGeneration({
+					generationId,
+					status: "working",
+					message: "Generating video...",
+					synthesis,
+					prompt,
+					mediaType: "video",
+					createdAt,
+				});
+				this.broadcast({
+					type: "agent:status",
+					generationId,
+					status: "Generating video...",
+				});
+				requestId = await submitVideoGeneration(
+					this.env.HIGGSFIELD_API_KEY,
+					this.env.HIGGSFIELD_API_SECRET,
+					prompt,
+					normalized.params ?? {},
+					{ webhookUrl },
+				);
+			} else {
+				await this.storeGeneration({
+					generationId,
+					status: "working",
+					message: "Generating image...",
+					synthesis,
+					prompt,
+					mediaType: "image",
+					createdAt,
+				});
+				this.broadcast({
+					type: "agent:status",
+					generationId,
+					status: "Generating image...",
+				});
+				requestId = await submitImageGeneration(
+					this.env.HIGGSFIELD_API_KEY,
+					this.env.HIGGSFIELD_API_SECRET,
+					prompt,
+					normalized.params ?? {},
+					{ webhookUrl },
+				);
+			}
 
-            const earlyWebhook =
-                await this.ctx.storage.get<HiggsfieldWebhookPayload>(
-                    this.webhookQueueKey(requestId),
-                );
-            if (earlyWebhook) {
-                console.log(
-                    "[voice-pipeline] found early webhook, finalizing",
-                );
-                await this.finalizeGeneration(generationId, earlyWebhook);
-                await this.ctx.storage.delete(
-                    this.webhookQueueKey(requestId),
-                );
-            } else {
-                this.broadcast({
-                    type: "agent:status",
-                    generationId,
-                    status: `Waiting for ${mediaType} to generate...`,
-                });
-                this.ctx.waitUntil(
-                    this.pollForCompletion(generationId, requestId),
-                );
-            }
+			console.log("[voice-pipeline] higgsfield requestId:", requestId);
+
+			await this.ctx.storage.put(
+				this.reqMapKey(requestId),
+				generationId,
+			);
+			await this.storeGeneration({
+				generationId,
+				status: "submitted",
+				message: `Waiting for ${normalized.mediaType} to generate...`,
+				synthesis,
+				prompt,
+				requestId,
+				mediaType: normalized.mediaType,
+				createdAt,
+			});
+
+			const earlyWebhook =
+				await this.ctx.storage.get<HiggsfieldWebhookPayload>(
+					this.webhookQueueKey(requestId),
+				);
+			if (earlyWebhook) {
+				console.log(
+					"[voice-pipeline] found early webhook, finalizing",
+				);
+				await this.finalizeGeneration(generationId, earlyWebhook);
+				await this.ctx.storage.delete(
+					this.webhookQueueKey(requestId),
+				);
+			} else {
+				this.broadcast({
+					type: "agent:status",
+					generationId,
+					status: `Waiting for ${normalized.mediaType} to generate...`,
+				});
+				this.ctx.waitUntil(
+					this.pollForCompletion(generationId, requestId),
+				);
+			}
         } catch (e) {
             console.error("[voice-pipeline] error:", e);
             await this.storeGeneration({
@@ -1010,4 +1067,55 @@ export class TldrawDurableObject extends DurableObject<Env> {
             }
         }
     }
+}
+
+function getMediaAction(actions?: ClaudeAgentAction[]): ClaudeAgentAction | undefined {
+	return actions?.find((action) =>
+		action.type === "generate_image" || action.type === "generate_video",
+	)
+}
+
+type NormalizedVoiceResult =
+	| { kind: "canvas"; action: ClaudeAgentAction }
+	| { kind: "media"; mediaType: "image" | "video"; prompt: string; params?: Record<string, unknown> }
+	| { kind: "analyze"; message?: string };
+
+function normalizeVoiceClassification(
+	classification: VoiceCommandClassification,
+): NormalizedVoiceResult {
+	switch (classification.type) {
+		case "sticky":
+		case "comment":
+		case "connect":
+		case "group":
+			return { kind: "canvas", action: classification };
+		case "generate_image":
+			return {
+				kind: "media",
+				mediaType: "image",
+				prompt: classification.prompt ?? "",
+				params: {},
+			};
+		case "generate_video":
+			return {
+				kind: "media",
+				mediaType: "video",
+				prompt: classification.prompt ?? "",
+				params: {},
+			};
+		case "image":
+		case "video":
+			return {
+				kind: "media",
+				mediaType: classification.type,
+				prompt: classification.prompt,
+				params: classification.params,
+			};
+		case "analyze":
+			return { kind: "analyze", message: classification.message };
+		default:
+			throw new Error(
+				`Unsupported voice command action: ${(classification as any).type}`,
+			);
+	}
 }
