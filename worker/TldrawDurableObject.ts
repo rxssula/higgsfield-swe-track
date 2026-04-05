@@ -64,6 +64,22 @@ interface HiggsfieldWebhookPayload {
     image?: { url: string };
     video?: { url: string };
     videos?: { url: string }[];
+    jobs?: {
+        id?: string;
+        status?: string;
+        results?: {
+            videos?: { url: string }[];
+            video_url?: string;
+            images?: { url: string }[];
+            image_url?: string;
+        };
+        result?: {
+            videos?: { url: string }[];
+            video_url?: string;
+            images?: { url: string }[];
+            image_url?: string;
+        };
+    }[];
 }
 
 export interface SnapshotMeta {
@@ -774,8 +790,20 @@ export class TldrawDurableObject extends DurableObject<Env> {
         if (!gen || gen.status === "done" || gen.status === "error") return;
 
         if (payload.status === "completed") {
-            const videoUrl = payload.video?.url ?? payload.videos?.[0]?.url;
-            const imageUrl = payload.images?.[0]?.url ?? payload.image?.url;
+            const videoUrl =
+                payload.video?.url ??
+                payload.videos?.[0]?.url ??
+                payload.jobs?.[0]?.results?.videos?.[0]?.url ??
+                payload.jobs?.[0]?.results?.video_url ??
+                payload.jobs?.[0]?.result?.videos?.[0]?.url ??
+                payload.jobs?.[0]?.result?.video_url;
+            const imageUrl =
+                payload.images?.[0]?.url ??
+                payload.image?.url ??
+                payload.jobs?.[0]?.results?.images?.[0]?.url ??
+                payload.jobs?.[0]?.results?.image_url ??
+                payload.jobs?.[0]?.result?.images?.[0]?.url ??
+                payload.jobs?.[0]?.result?.image_url;
             const mediaType =
                 gen.mediaType ?? (videoUrl ? "video" : "image");
             const mediaUrl =
