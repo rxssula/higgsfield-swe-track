@@ -13,7 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { AutoRouter, error, IRequest } from "itty-router";
 import { serializeCanvasState } from "../src/canvas/serializer";
 import type { CanvasSnapshot, CanvasShape, CanvasBinding } from "../src/canvas/types";
-import { invokeAgent, classifyVoiceCommand } from "../src/agent/claude";
+import { invokeAgent, classifyVoiceCommand, reorganizeLayout, type ReorganizeShape } from "../src/agent/claude";
 import type {
 	AgentAction as ClaudeAgentAction,
 	VoiceCommandClassification,
@@ -826,6 +826,32 @@ export class TldrawDurableObject extends DurableObject<Env> {
 		}
 
 		return { shapes, bindings };
+	}
+
+	// ── Reorganize layout ──
+
+	async handleReorganize(request: IRequest) {
+		const body = (await request.json()) as {
+			shapes: ReorganizeShape[];
+			container: { w: number; h: number };
+		};
+
+		if (!Array.isArray(body.shapes) || body.shapes.length === 0) {
+			return error(400, "shapes array is required and must not be empty");
+		}
+
+		try {
+			const result = await reorganizeLayout(
+				this.env.OPENROUTER_API_KEY,
+				this.env.OPENROUTER_MODEL,
+				body.shapes,
+				body.container,
+			);
+			return Response.json(result);
+		} catch (e) {
+			console.error("[reorganize] error:", e);
+			return error(500, String(e));
+		}
 	}
 
 	// ── Voice command ──

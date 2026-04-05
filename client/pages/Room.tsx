@@ -16,6 +16,7 @@ import {
 	DefaultToolbar,
 	DefaultToolbarContent,
 	createShapeId,
+	toRichText,
 } from "tldraw";
 import jsPDF from "jspdf";
 import { getBookmarkPreview } from "../getBookmarkPreview";
@@ -258,9 +259,8 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 					type: "image",
 					x,
 					y,
-					meta: prompt ? { aiPrompt: prompt } : {},
+					meta: { aiGenerated: true, ...(prompt ? { aiPrompt: prompt } : {}) },
 					props: { assetId, w, h },
-					meta: { aiGenerated: true },
 				});
 			};
 			img.onerror = () => {
@@ -302,9 +302,8 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 					type: "image",
 					x,
 					y,
-					meta: prompt ? { aiPrompt: prompt } : {},
+					meta: { aiGenerated: true, ...(prompt ? { aiPrompt: prompt } : {}) },
 					props: { assetId, w: fallbackSize, h: fallbackSize },
-					meta: { aiGenerated: true },
 				});
 			};
 			img.src = imageUrl;
@@ -348,9 +347,8 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 				type: "video",
 				x: center.x - w / 2,
 				y: center.y - h / 2,
-				meta: prompt ? { aiPrompt: prompt } : {},
+				meta: { aiGenerated: true, ...(prompt ? { aiPrompt: prompt } : {}) },
 				props: { assetId, w, h },
-				meta: { aiGenerated: true },
 			});
 		},
 		[],
@@ -385,8 +383,10 @@ function RoomInner({ roomId, username }: { roomId?: string; username: string }) 
 				if (!data.replayed) {
 					const mediaPrompt = data.prompt || data.synthesis;
 					if (data.videoUrl) placeVideoOnCanvas(data.videoUrl, mediaPrompt);
-					else if (data.imageUrl)
-						placeImageOnCanvas(data.imageUrl, mediaPrompt);
+					else if (data.imageUrl) placeImageOnCanvas(data.imageUrl, mediaPrompt);
+					if (Array.isArray(data.actions) && editorRef.current) {
+						applyAgentActions(editorRef.current, data.actions);
+					}
 				}
 			} else if (data.type === "agent:error" && data.generationId) {
 				setGenerations((prev) => {
